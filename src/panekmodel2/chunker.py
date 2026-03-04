@@ -44,11 +44,13 @@ def chunk_segments(
             start_time = seg.start
         end_time = seg.end
 
-        # Split overly long individual segments
+        # Split overly long individual segments; iterate in max_words strides
+        # so the tail of the segment is never silently discarded.
         if len(words) > max_words:
             flush()
-            chunk_text = " ".join(words[:max_words])
-            chunks.append(Chunk(text=chunk_text, start=seg.start, end=seg.end, source_indices=[idx]))
+            for word_start in range(0, len(words), max_words):
+                chunk_text = " ".join(words[word_start:word_start + max_words])
+                chunks.append(Chunk(text=chunk_text, start=seg.start, end=seg.end, source_indices=[idx]))
             continue
 
         prospective_word_count = len(" ".join(buffer + [seg.text]).split())

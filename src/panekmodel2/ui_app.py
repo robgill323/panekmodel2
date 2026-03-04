@@ -1,9 +1,9 @@
 import json
 from typing import List, Optional
 
-import altair as alt
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from panekmodel2.config import Settings, get_settings
@@ -12,6 +12,16 @@ from panekmodel2.pipeline import PipelineRunner, extract_video_id
 st.set_page_config(page_title="PanekModel2", layout="wide")
 
 st.title("YouTube Transcript → Topics → Sentiment")
+
+
+def fmt_ts(seconds: float) -> str:
+    """Convert seconds to YouTube-style timestamp (MM:SS or H:MM:SS)."""
+    s = max(0, int(seconds))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{sec:02d}"
+    return f"{m}:{sec:02d}"
 
 
 def parse_urls(raw: str) -> List[str]:
@@ -23,7 +33,7 @@ def parse_urls(raw: str) -> List[str]:
     return values
 
 
-def build_timeline_dataframe(outputs, max_time: float) -> pd.DataFrame:
+def build_timeline_dataframe(outputs, max_time: float, topic_keywords: dict | None = None) -> pd.DataFrame:
     if outputs.topics_df.empty:
         rows = []
         for idx, (chunk, sent) in enumerate(zip(outputs.chunks, outputs.sentiments)):
@@ -51,16 +61,24 @@ def build_timeline_dataframe(outputs, max_time: float) -> pd.DataFrame:
     topic_rows = df[["chunk_index", "start", "end", "text", "topic"]].copy()
     topic_rows["type"] = "Topic"
     topic_rows["value"] = "Topic " + topic_rows["topic"].astype(str)
+    if topic_keywords:
+        topic_rows["hover_label"] = topic_rows["topic"].map(
+            lambda t: f"Topic {t}: {', '.join(topic_keywords.get(t, []))}"
+            if topic_keywords.get(t) else f"Topic {t}"
+        )
+    else:
+        topic_rows["hover_label"] = topic_rows["value"]
+    sentiment_rows["hover_label"] = sentiment_rows["value"]
 
     timeline = pd.concat([sentiment_rows, topic_rows], ignore_index=True)
 
-    # Guard against non-finite values that can break rendering.
+    # Guard against non-finite or non-numeric values that can break rendering.
     timeline = timeline.replace([np.inf, -np.inf], np.nan)
+    timeline["start"] = pd.to_numeric(timeline["start"], errors="coerce")
+    timeline["end"] = pd.to_numeric(timeline["end"], errors="coerce")
     timeline = timeline.dropna(subset=["start", "end"])
     if timeline.empty:
         return timeline
-    timeline["start"] = timeline["start"].astype(float)
-    timeline["end"] = timeline["end"].astype(float)
     timeline = timeline[np.isfinite(timeline["start"]) & np.isfinite(timeline["end"])]
     if timeline.empty:
         return timeline
@@ -129,16 +147,27 @@ if submitted:
         runner = PipelineRunner(custom_settings)
         results = []
         failures = []
-        for raw_url in urls:
-            with st.spinner(f"Processing {raw_url}"):
-                try:
-                    outputs = runner.run(raw_url)
-                    results.append((raw_url, outputs))
-                except Exception as exc:  # noqa: BLE001
-                    failures.append((raw_url, exc))
+        try:
+            with st.status("Running pipeline…", expanded=True) as run_status:
+                def _progress(msg: str) -> None:
+                    run_status.write(msg)
+
+                if len(urls) > 1:
+                    all_outputs = runner.run_multi(urls, progress=_progress)
+                    results = list(zip(urls, all_outputs))
+                else:
+                    _progress(f"Fetching transcript: {urls[0]}")
+                    outputs = runner.run(urls[0])
+                    _progress("Done.")
+                    results = [(urls[0], outputs)]
+
+                run_status.update(label="Pipeline complete!", state="complete")
+        except Exception as exc:  # noqa: BLE001
+            failures = [(urls, exc)]
+            results = []
 
         if failures:
-            st.error({"failed": [(u, str(e)) for u, e in failures]})
+            st.error({"failed": [(str(u), str(e)) for u, e in failures]})
 
         if not results:
             st.stop()
@@ -148,97 +177,205 @@ if submitted:
         video_choices = []
         for raw_url, outputs in results:
             title = outputs.metadata.get("title") or extract_video_id(raw_url)
-            label = f"{title} ({outputs.video_id})"
+            yt_url = f"https://youtube.com/watch?v={outputs.video_id}"
+            label = f"{title} ({yt_url})"
             video_choices.append({"label": label, "title": title, "raw_url": raw_url, "outputs": outputs})
 
-        selection_label = st.selectbox("Select video", [c["label"] for c in video_choices])
-        selected = next(c for c in video_choices if c["label"] == selection_label)
-        outputs = selected["outputs"]
-        video_title = selected["title"]
+        # Persist results so reruns triggered by widget interactions don't lose them.
+        st.session_state["video_choices"] = video_choices
+        st.session_state["runner"] = runner
 
-        st.markdown(f"### {video_title}")
 
-        tabs = st.tabs(["Overview", "Topics", "Sentiment", "Transcript", "Preview"])
+if st.session_state.get("video_choices"):
+    video_choices = st.session_state["video_choices"]
+    runner = st.session_state["runner"]
 
-        with tabs[0]:
-            st.write(
-                {
-                    "video_id": outputs.video_id,
-                    "segments": len(outputs.segments),
-                    "chunks": len(outputs.chunks),
+    # ── Cross-video Topic Map (only shown when 2+ videos) ──────────────────────
+    if len(video_choices) > 1:
+        with st.expander("Topic Map — cross-video relationships", expanded=True):
+            # Collect all topic ids across all videos (excluding outlier -1)
+            all_topic_ids = sorted({
+                int(tid)
+                for vc in video_choices
+                for tid in vc["outputs"].topics_df["topic"].unique()
+                if int(tid) != -1
+            })
+
+            # Build keyword labels for each topic from the shared model
+            topic_labels = {}
+            for tid in all_topic_ids:
+                _kw_noise = {
+                    "__", "_", "",
+                    "laughter", "laughing", "laughs",
+                    "applause", "clapping",
+                    "clears throat", "throat",
+                    "crosstalk", "inaudible",
+                    "sighs", "sigh", "music", "beep",
                 }
+                kws = [
+                    kw for kw, _ in (runner.topic_modeler.model.get_topic(tid) or [])
+                    if kw.strip("_") != "" and "__" not in kw and kw not in _kw_noise
+                ][:4]
+                topic_labels[tid] = f"T{tid}: {', '.join(kws)}" if kws else f"T{tid}"
+
+            # Build matrix: rows = videos, cols = topics, values = chunk counts
+            video_names = [vc["title"][:35] for vc in video_choices]
+            z = []  # chunk counts
+            z_pct = []  # percentage of video's chunks
+            for vc in video_choices:
+                tdf = vc["outputs"].topics_df
+                total_chunks = len(vc["outputs"].chunks)
+                row = []
+                row_pct = []
+                for tid in all_topic_ids:
+                    count = int((tdf["topic"] == tid).sum())
+                    row.append(count)
+                    row_pct.append(round(count / total_chunks * 100, 1) if total_chunks else 0.0)
+                z.append(row)
+                z_pct.append(row_pct)
+
+            col_labels = [topic_labels[tid] for tid in all_topic_ids]
+
+            # Custom text: show count + % on each cell
+            text_vals = [
+                [f"{z[r][c]}<br>{z_pct[r][c]}%" if z[r][c] > 0 else "" for c in range(len(all_topic_ids))]
+                for r in range(len(video_choices))
+            ]
+
+            fig_hm = go.Figure(go.Heatmap(
+                z=z,
+                x=col_labels,
+                y=video_names,
+                text=text_vals,
+                texttemplate="%{text}",
+                colorscale="Blues",
+                showscale=True,
+                colorbar=dict(title="Chunks"),
+                hoverongaps=False,
+            ))
+            fig_hm.update_layout(
+                height=max(200, 80 + len(video_choices) * 55),
+                margin=dict(l=0, r=0, t=30, b=0),
+                xaxis=dict(tickangle=-35, title=""),
+                yaxis=dict(title=""),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
             )
-            if outputs.metadata:
-                st.write(outputs.metadata)
+            st.plotly_chart(fig_hm, use_container_width=True)
 
-        with tabs[1]:
-            topic_summary = runner.summarize_topics(outputs)
-            if topic_summary:
-                topic_rows = [
-                    {
-                        "topic_id": t["topic_id"],
-                        "keywords": ", ".join(t["keywords"]),
-                        "start": t["representative"]["start"],
-                        "end": t["representative"]["end"],
-                        "text": t["representative"]["text"],
-                    }
-                    for t in topic_summary
-                ]
-                st.dataframe(pd.DataFrame(topic_rows))
+            # Shared-topic summary table
+            shared = [
+                {
+                    "topic": topic_labels[tid],
+                    "videos": ", ".join(
+                        vc["title"][:25]
+                        for vc in video_choices
+                        if (vc["outputs"].topics_df["topic"] == tid).any()
+                    ),
+                    "total_chunks": sum(z[r][c] for r, c in enumerate([all_topic_ids.index(tid)] * len(video_choices))),
+                }
+                for c, tid in enumerate(all_topic_ids)
+                if sum(1 for vc in video_choices if (vc["outputs"].topics_df["topic"] == tid).any()) > 1
+            ]
+            if shared:
+                st.markdown("**Topics shared across multiple videos:**")
+                st.dataframe(pd.DataFrame(shared), use_container_width=True, hide_index=True)
             else:
-                st.info("No topics found (possibly too few chunks or all outliers). Try reducing chunk sizes.")
+                st.info("No topics are shared across multiple videos in this run.")
 
-        with tabs[2]:
-            roll = outputs.sentiment_rollup
-            st.metric("Mean", f"{roll['mean']:.3f}")
-            st.metric("Median", f"{roll['median']:.3f}")
-            st.write({"fractions": roll.get("fractions", {})})
+    st.divider()
+    selection_label = st.selectbox("Select video", [c["label"] for c in video_choices])
+    selected = next(c for c in video_choices if c["label"] == selection_label)
+    outputs = selected["outputs"]
+    video_title = selected["title"]
 
-            by_topic = runner.sentiment_by_topic(outputs)
-            if by_topic:
-                st.dataframe(
-                    pd.DataFrame(
-                        [
-                            {
-                                "topic": row["topic_id"],
-                                "mean": row["sentiment"]["mean"],
-                                "median": row["sentiment"]["median"],
-                                "frac_positive": row["sentiment"].get("fractions", {}).get("positive", 0.0),
-                                "frac_negative": row["sentiment"].get("fractions", {}).get("negative", 0.0),
-                            }
-                            for row in by_topic
-                        ]
-                    )
+    # Reset preview state when switching videos to avoid stale timestamps from prior selections.
+    if st.session_state.get("last_video_id") != outputs.video_id:
+        st.session_state["preview_time"] = 0.0
+        st.session_state["last_video_id"] = outputs.video_id
+
+    st.markdown(f"### {video_title}")
+
+    tabs = st.tabs(["Overview", "Topics", "Sentiment", "Transcript", "Preview", "Analysis"])
+
+    with tabs[0]:
+        st.write(
+            {
+                "video_id": outputs.video_id,
+                "segments": len(outputs.segments),
+                "chunks": len(outputs.chunks),
+            }
+        )
+        if outputs.metadata:
+            st.write(outputs.metadata)
+
+    with tabs[1]:
+        topic_summary = runner.summarize_topics(outputs)
+        if topic_summary:
+            topic_rows = [
+                {
+                    "topic_id": t["topic_id"],
+                    "keywords": ", ".join(t["keywords"]),
+                    "timestamp": f"{fmt_ts(t['representative']['start'])} – {fmt_ts(t['representative']['end'])}",
+                    "text": t["representative"]["text"],
+                }
+                for t in topic_summary
+            ]
+            st.dataframe(pd.DataFrame(topic_rows))
+        else:
+            st.info("No topics found (possibly too few chunks or all outliers). Try reducing chunk sizes.")
+
+    with tabs[2]:
+        roll = outputs.sentiment_rollup
+        st.metric("Mean", f"{roll['mean']:.3f}")
+        st.metric("Median", f"{roll['median']:.3f}")
+        st.write({"fractions": roll.get("fractions", {})})
+
+        by_topic = runner.sentiment_by_topic(outputs)
+        if by_topic:
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "topic": row["topic_id"],
+                            "mean": row["sentiment"]["mean"],
+                            "median": row["sentiment"]["median"],
+                            "frac_positive": row["sentiment"].get("fractions", {}).get("positive", 0.0),
+                            "frac_negative": row["sentiment"].get("fractions", {}).get("negative", 0.0),
+                        }
+                        for row in by_topic
+                    ]
                 )
-
-        with tabs[3]:
-            with st.expander("Chunks"):
-                for idx, chunk in enumerate(outputs.chunks):
-                    st.markdown(f"**Chunk {idx}**: {chunk.start:.1f}-{chunk.end:.1f}s")
-                    st.write(chunk.text)
-
-            with st.expander("Segments (raw transcript)"):
-                st.write(pd.DataFrame([s.__dict__ for s in outputs.segments]))
-
-            st.download_button(
-                "Download segments JSON",
-                json.dumps([s.__dict__ for s in outputs.segments], indent=2),
-                file_name=f"{outputs.video_id}_segments.json",
             )
 
-        with tabs[4]:
-            if not outputs.chunks:
-                st.info("No chunks to preview.")
+    with tabs[3]:
+        with st.expander("Chunks"):
+            for idx, chunk in enumerate(outputs.chunks):
+                st.markdown(f"**Chunk {idx}**: {fmt_ts(chunk.start)} – {fmt_ts(chunk.end)}")
+                st.write(chunk.text)
+
+        with st.expander("Segments (raw transcript)"):
+            st.write(pd.DataFrame([s.__dict__ for s in outputs.segments]))
+
+        st.download_button(
+            "Download segments JSON",
+            json.dumps([s.__dict__ for s in outputs.segments], indent=2),
+            file_name=f"{outputs.video_id}_segments.json",
+        )
+
+    with tabs[4]:
+        if not outputs.chunks:
+            st.info("No chunks to preview.")
+        else:
+            valid_chunks = [c for c in outputs.chunks if np.isfinite(c.start) and np.isfinite(c.end)]
+            if not valid_chunks:
+                st.info("No valid timestamps to preview.")
             else:
-                valid_chunks = [c for c in outputs.chunks if np.isfinite(c.start) and np.isfinite(c.end)]
-                if not valid_chunks:
-                    st.info("No valid timestamps to preview.")
-                    st.stop()
                 max_time = max(c.end for c in valid_chunks)
                 if not np.isfinite(max_time) or max_time <= 0:
                     st.info("No valid timestamps to preview.")
                 else:
-                    # Topic jump: pick the earliest chunk per topic to seek quickly.
+                    max_time = float(np.clip(max_time, 0.0, 86400.0))
                     topic_jump = (
                         outputs.topics_df.groupby("topic")["start"].min().reset_index()
                         if not outputs.topics_df.empty
@@ -249,7 +386,7 @@ if submitted:
                         topic_jump = pd.DataFrame({"topic": [-1], "start": [0.0]})
                     topic_jump["start"] = topic_jump["start"].clip(lower=0.0, upper=max_time)
 
-                    topic_options = [f"Topic {int(row.topic)} @ {row.start:.1f}s" for _, row in topic_jump.iterrows()]
+                    topic_options = [f"Topic {int(row.topic)} @ {fmt_ts(row.start)}" for _, row in topic_jump.iterrows()]
                     default_option = topic_options[0] if topic_options else None
 
                     col_jump, col_slider = st.columns([1, 2])
@@ -257,76 +394,293 @@ if submitted:
                         choice = st.selectbox("Jump to topic", topic_options, index=0 if default_option else None)
                         if choice:
                             chosen_idx = topic_options.index(choice)
-                            selected_time = float(topic_jump.iloc[chosen_idx].start)
-                            selected_time = max(0.0, min(selected_time, float(max_time)))
-                            st.session_state["preview_time"] = selected_time
+                            jump_time = float(topic_jump.iloc[chosen_idx].start)
+                            jump_time = max(0.0, min(jump_time, float(max_time)))
+                            st.session_state["preview_time"] = jump_time
                     with col_slider:
                         selected_time = float(st.session_state.get("preview_time", 0.0))
                         selected_time = max(0.0, min(selected_time, float(max_time)))
                         step_val = 1.0
-                        # Align value to step grid to avoid slider conflicts.
                         selected_time = round(selected_time / step_val) * step_val
                         selected_time = st.slider(
                             "Timestamp (seconds)",
                             min_value=0.0,
                             max_value=float(max_time),
                             value=selected_time,
-                            step=step_val if step_val > 0 else 0.1,
+                            step=step_val,
                             key="preview_time",
                         )
 
-                def chunk_for_time(time_val: float) -> int:
-                    for idx, chk in enumerate(outputs.chunks):
-                        if chk.start <= time_val <= chk.end:
-                            return idx
-                    return len(outputs.chunks) - 1
+                    if not np.isfinite(selected_time):
+                        selected_time = 0.0
 
-                chunk_idx = chunk_for_time(selected_time)
-                chunk = outputs.chunks[chunk_idx]
-                sentiment = outputs.sentiments[chunk_idx]
-                topic_row = outputs.topics_df.loc[outputs.topics_df["chunk_index"] == chunk_idx]
-                topic_id: Optional[int] = None
-                if not topic_row.empty:
-                    topic_id = int(topic_row.iloc[0]["topic"])
+                    def chunk_for_time(time_val: float) -> int:
+                        for idx, chk in enumerate(outputs.chunks):
+                            if chk.start <= time_val <= chk.end:
+                                return idx
+                        return len(outputs.chunks) - 1
 
-                embed_url = (
-                    f"https://www.youtube.com/embed/{outputs.video_id}?start={int(selected_time)}&controls=1"
-                    "&modestbranding=1"
-                )
-                st.components.v1.html(
-                    f"<iframe width='100%' height='360' src='{embed_url}' "
-                    "title='YouTube video player' frameborder='0' allow='accelerometer; autoplay; clipboard-write; "
-                    "encrypted-media; gyroscope; picture-in-picture' allowfullscreen></iframe>",
-                    height=380,
-                )
+                    chunk_idx = chunk_for_time(selected_time)
+                    chunk = outputs.chunks[chunk_idx]
+                    sentiment = outputs.sentiments[chunk_idx]
+                    topic_row = outputs.topics_df.loc[outputs.topics_df["chunk_index"] == chunk_idx]
+                    topic_id: Optional[int] = None
+                    if not topic_row.empty:
+                        topic_id = int(topic_row.iloc[0]["topic"])
 
-                st.write(
-                    {
-                        "timestamp": f"{selected_time:.1f}s",
-                        "chunk": f"{chunk.start:.1f}-{chunk.end:.1f}s",
-                        "sentiment": sentiment.label,
-                        "topic": topic_id,
+                    embed_url = (
+                        f"https://www.youtube.com/embed/{outputs.video_id}?start={int(selected_time)}&controls=1"
+                        "&modestbranding=1"
+                    )
+                    st.components.v1.html(
+                        f"<iframe width='100%' height='360' src='{embed_url}' "
+                        "title='YouTube video player' frameborder='0' allow='accelerometer; autoplay; clipboard-write; "
+                        "encrypted-media; gyroscope; picture-in-picture' allowfullscreen></iframe>",
+                        height=380,
+                    )
+
+                    st.write(
+                        {
+                            "timestamp": fmt_ts(selected_time),
+                            "chunk": f"{fmt_ts(chunk.start)} – {fmt_ts(chunk.end)}",
+                            "sentiment": sentiment.label,
+                            "topic": topic_id,
+                        }
+                    )
+
+                    topic_kw_dict = {
+                        t["topic_id"]: t["keywords"]
+                        for t in runner.summarize_topics(outputs)
                     }
-                )
-
-                timeline_df = build_timeline_dataframe(outputs, max_time)
-                if timeline_df.empty:
-                    st.info("No timeline data to display.")
-                else:
-                    timeline_chart = (
-                        alt.Chart(timeline_df)
-                        .mark_rect(height=24)
-                        .encode(
-                            x=alt.X("start:Q", title="Seconds"),
-                            x2="end:Q",
-                            y=alt.Y("type:N", title="", sort=["Sentiment", "Topic"]),
-                            color=alt.Color("value:N", title=""),
-                            tooltip=["type", "value", "start", "end", "text"],
+                    timeline_df = build_timeline_dataframe(outputs, max_time, topic_keywords=topic_kw_dict)
+                    timeline_df["start"] = pd.to_numeric(timeline_df["start"], errors="coerce")
+                    timeline_df["end"] = pd.to_numeric(timeline_df["end"], errors="coerce")
+                    timeline_df = timeline_df.replace([np.inf, -np.inf], np.nan).dropna(subset=["start", "end"])
+                    timeline_df = timeline_df[np.isfinite(timeline_df["start"]) & np.isfinite(timeline_df["end"])]
+                    timeline_df["start"] = timeline_df["start"].clip(0.0, max_time)
+                    timeline_df["end"] = timeline_df["end"].clip(0.0, max_time)
+                    if timeline_df.empty or not np.isfinite(max_time):
+                        st.info("No timeline data to display.")
+                    else:
+                        safe_time = float(np.clip(selected_time, 0.0, max_time))
+                        row_order = ["Sentiment", "Topic"]
+                        # Fixed semantic colors for sentiment labels; topics get
+                        # the rotating palette below.
+                        color_map: dict = {
+                            "positive": "#22c55e",   # vivid green
+                            "pos": "#22c55e",
+                            "neutral": "#eab308",    # vivid amber
+                            "neu": "#eab308",
+                            "negative": "#ef4444",   # vivid red
+                            "neg": "#ef4444",
+                        }
+                        palette = [
+                            "#3B82F6",  # blue
+                            "#8B5CF6",  # violet
+                            "#06B6D4",  # cyan
+                            "#F97316",  # orange
+                            "#EC4899",  # pink
+                            "#6366F1",  # indigo
+                            "#14B8A6",  # teal
+                            "#D946EF",  # fuchsia
+                            "#0EA5E9",  # sky
+                            "#A855F7",  # purple
+                        ]
+                        traces = []
+                        for row_type in row_order:
+                            subset = timeline_df[timeline_df["type"] == row_type]
+                            for _, rec in subset.iterrows():
+                                val = str(rec["value"])
+                                if val not in color_map:
+                                    color_map[val] = palette[len(color_map) % len(palette)]
+                                hover_label = str(rec.get("hover_label", val))
+                                traces.append(
+                                    go.Bar(
+                                        x=[float(rec["end"]) - float(rec["start"])],
+                                        y=[row_type],
+                                        base=[float(rec["start"])],
+                                        orientation="h",
+                                        marker_color=color_map[val],
+                                        name=val,
+                                        hovertemplate=(
+                                            f"<b>{hover_label}</b><br>"
+                                            f"{fmt_ts(float(rec['start']))} \u2013 {fmt_ts(float(rec['end']))}<br>"
+                                            f"{str(rec.get('text',''))[:120]}<extra></extra>"
+                                        ),
+                                        showlegend=val not in [t.name for t in traces],
+                                    )
+                                )
+                        fig = go.Figure(traces)
+                        fig.add_vline(x=safe_time, line_color="black", line_width=2)
+                        fig.update_layout(
+                            barmode="overlay",
+                            height=140,
+                            margin=dict(l=0, r=0, t=0, b=30),
+                            xaxis=dict(title="Seconds", range=[0.0, float(max_time)]),
+                            yaxis=dict(title=""),
+                            legend=dict(orientation="h", y=1.3),
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(0,0,0,0)",
                         )
-                        .properties(height=120, width="container")
+                        st.plotly_chart(fig, use_container_width=True)
+
+    with tabs[5]:
+        model = runner.topic_modeler.model
+        if model is None:
+            st.info("No topic model available.")
+        else:
+            # ── 1. Intertopic Distance Map ─────────────────────────────────────
+            st.subheader("Intertopic Distance Map")
+            st.caption(
+                "Topics are reduced to 2D via UMAP. Bubble size reflects the number of chunks "
+                "assigned to that topic; proximity indicates semantic similarity."
+            )
+            try:
+                fig_itd = model.visualize_topics()
+                fig_itd.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    margin=dict(l=0, r=0, t=40, b=0),
+                )
+                st.plotly_chart(fig_itd, use_container_width=True)
+            except Exception as _e:
+                st.info(f"Intertopic distance map unavailable (need ≥ 2 topics): {_e}")
+
+            st.divider()
+
+            # ── 2. Topic Hierarchy Dendrogram ──────────────────────────────────
+            st.subheader("Topic Hierarchy")
+            st.caption(
+                "Hierarchical clustering of topics by their c-TF-IDF representations. "
+                "Topics that merge early (low on the y-axis) are most semantically similar."
+            )
+            try:
+                fig_hier = model.visualize_hierarchy()
+                fig_hier.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    margin=dict(l=0, r=0, t=40, b=0),
+                    height=max(400, len(model.get_topics()) * 22),
+                )
+                st.plotly_chart(fig_hier, use_container_width=True)
+            except Exception as _e:
+                st.info(f"Topic hierarchy unavailable (need ≥ 2 topics): {_e}")
+
+            st.divider()
+
+            # ── 3. Topic–Sentiment Scatter ─────────────────────────────────────
+            st.subheader("Topic\u2013Sentiment Scatter")
+            st.caption(
+                "Each bubble is one topic. X-axis = mean sentiment score (higher is more positive). "
+                "Y-axis = number of chunks in that topic (topic size). "
+                "Colour encodes sentiment from red (negative) to green (positive)."
+            )
+            _topic_summary = runner.summarize_topics(outputs)
+            _by_topic = runner.sentiment_by_topic(outputs)
+            _keyword_map = {t["topic_id"]: t["keywords"] for t in _topic_summary}
+            _scatter_rows = []
+            for _row in _by_topic:
+                _tid = _row["topic_id"]
+                if _tid == -1:
+                    continue
+                _kws = _keyword_map.get(_tid, [])
+                _frac = _row["sentiment"].get("fractions", {})
+                _scatter_rows.append({
+                    "topic_id": _tid,
+                    "label": f"T{_tid}: {', '.join(_kws[:4])}",
+                    "mean_sentiment": _row["sentiment"]["mean"],
+                    "chunk_count": _row["count"],
+                    "frac_positive": _frac.get("positive", 0.0),
+                    "frac_negative": _frac.get("negative", 0.0),
+                })
+            if _scatter_rows:
+                _sdf = pd.DataFrame(_scatter_rows)
+                _sizes = (_sdf["chunk_count"] / max(_sdf["chunk_count"].max(), 1) * 55 + 12).tolist()
+                _controversy = [
+                    f"{r['frac_positive']*100:.0f}% pos / {r['frac_negative']*100:.0f}% neg"
+                    for _, r in _sdf.iterrows()
+                ]
+                fig_scatter = go.Figure(go.Scatter(
+                    x=_sdf["mean_sentiment"].tolist(),
+                    y=_sdf["chunk_count"].tolist(),
+                    mode="markers+text",
+                    text=_sdf["label"].tolist(),
+                    textposition="top center",
+                    customdata=list(zip(_controversy, _sdf["topic_id"].tolist())),
+                    marker=dict(
+                        size=_sizes,
+                        color=_sdf["mean_sentiment"].tolist(),
+                        colorscale="RdYlGn",
+                        cmin=-1.0,
+                        cmax=1.0,
+                        showscale=True,
+                        colorbar=dict(
+                            title="Mean<br>Sentiment",
+                            tickvals=[-1, -0.5, 0, 0.5, 1],
+                            ticktext=["-1 (neg)", "-0.5", "0", "0.5", "+1 (pos)"],
+                        ),
+                        line=dict(width=1, color="rgba(80,80,80,0.5)"),
+                    ),
+                    hovertemplate=(
+                        "<b>%{text}</b><br>"
+                        "Mean sentiment: %{x:.3f}<br>"
+                        "Chunks: %{y}<br>"
+                        "%{customdata[0]}<extra></extra>"
+                    ),
+                ))
+                fig_scatter.add_vline(
+                    x=0, line_dash="dash", line_color="gray", line_width=1,
+                    annotation_text="neutral", annotation_position="top",
+                )
+                fig_scatter.update_layout(
+                    xaxis_title="Mean Sentiment Score",
+                    yaxis_title="Chunk Count (topic size)",
+                    xaxis=dict(range=[-1.05, 1.05], zeroline=False),
+                    height=480,
+                    margin=dict(l=0, r=0, t=20, b=0),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                )
+                st.plotly_chart(fig_scatter, use_container_width=True)
+
+                # Controversy table: topics ranked by sentiment std dev
+                _controversy_rows = []
+                for _row in _by_topic:
+                    _tid = _row["topic_id"]
+                    if _tid == -1:
+                        continue
+                    _sents = [
+                        s.score * (1 if s.label.lower().startswith("pos") else -1)
+                        for s in outputs.sentiments
+                    ]
+                    _mask = outputs.topics_df["topic"] == _tid
+                    _topic_scores = [
+                        _sents[i]
+                        for i in outputs.topics_df[_mask]["chunk_index"].tolist()
+                        if i < len(_sents)
+                    ]
+                    if len(_topic_scores) > 1:
+                        import statistics
+                        _std = statistics.stdev(_topic_scores)
+                    else:
+                        _std = 0.0
+                    _frac = _row["sentiment"].get("fractions", {})
+                    _controversy_rows.append({
+                        "topic": _keyword_map.get(_tid, [f"T{_tid}"])[0] if _keyword_map.get(_tid) else f"T{_tid}",
+                        "mean_sentiment": round(_row["sentiment"]["mean"], 3),
+                        "controversy (stdev)": round(_std, 3),
+                        "% positive": f"{_frac.get('positive', 0)*100:.0f}%",
+                        "% negative": f"{_frac.get('negative', 0)*100:.0f}%",
+                        "chunks": _row["count"],
+                    })
+                if _controversy_rows:
+                    st.caption(
+                        "**Controversy scores** — topics ranked by sentiment standard deviation. "
+                        "High stdev means the video discusses this topic from mixed emotional angles."
                     )
-                    selected_rule = alt.Chart(pd.DataFrame({"time": [selected_time]})).mark_rule(color="black").encode(
-                        x="time:Q"
-                    )
-                    # Stretch to the full tab width to match the video embed above.
-                    st.altair_chart(timeline_chart + selected_rule, use_container_width=True)
+                    _cdf = pd.DataFrame(_controversy_rows).sort_values(
+                        "controversy (stdev)", ascending=False
+                    ).reset_index(drop=True)
+                    st.dataframe(_cdf, use_container_width=True, hide_index=True)
+            else:
+                st.info("Not enough topic/sentiment data to build scatter plot.")

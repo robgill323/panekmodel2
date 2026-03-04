@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import List, Sequence
 
 import numpy as np
+from transformers import logging as hf_logging
 from transformers import pipeline as hf_pipeline
 
 from .chunker import Chunk
@@ -21,6 +23,10 @@ class SentimentResult:
 class SentimentAnalyzer:
     def __init__(self, model_name: str, batch_size: int = 16, use_cuda: bool = False):
         device = 0 if use_cuda else -1
+        # Disable HF/tqdm progress bars during weight loading to avoid
+        # BrokenPipeError when stderr is redirected (e.g. inside Streamlit).
+        os.environ.setdefault("TQDM_DISABLE", "1")
+        hf_logging.disable_progress_bar()
         self.pipe = hf_pipeline("sentiment-analysis", model=model_name, device=device)
         self.batch_size = batch_size
         self.label_map = {

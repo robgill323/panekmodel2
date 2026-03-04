@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from typing import Optional
 
@@ -22,15 +23,16 @@ class Settings(BaseSettings):
     embedding_model: str = Field(
         default="all-mpnet-base-v2", description="Sentence embedding model for BERTopic."
     )
-    chunk_max_words: int = Field(default=400, description="Maximum words per chunk before splitting.")
-    chunk_max_seconds: int = Field(default=90, description="Maximum seconds per chunk before splitting.")
+    chunk_max_words: int = Field(default=200, description="Maximum words per chunk before splitting.")
+    chunk_max_seconds: int = Field(default=60, description="Maximum seconds per chunk before splitting.")
     topic_reduce_to: int = Field(default=10, description="Reduce topics to roughly this count for display.")
     sentiment_model: str = Field(
-        default="cardiffnlp/twitter-roberta-base-sentiment-latest",
+        default="siebert/sentiment-roberta-large-english",
         description="HF model for sentiment-analysis pipeline.",
     )
     sentiment_batch_size: int = Field(default=16, description="Batch size for sentiment inference.")
     cuda: bool = Field(default=False, description="Force CUDA usage when available.")
+    hf_token: Optional[str] = Field(default=None, description="Hugging Face token for HF Hub downloads.")
 
     class Config:
         env_prefix = ""
@@ -40,4 +42,11 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    # Propagate HF token to env for libraries that read os.environ directly.
+    if settings.hf_token:
+        # Cover common env var names used by transformers/huggingface_hub/langchain.
+        os.environ.setdefault("HF_TOKEN", settings.hf_token)
+        os.environ.setdefault("HUGGINGFACEHUB_API_TOKEN", settings.hf_token)
+        os.environ.setdefault("HUGGINGFACE_HUB_TOKEN", settings.hf_token)
+    return settings
