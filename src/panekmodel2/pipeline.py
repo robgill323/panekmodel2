@@ -152,7 +152,7 @@ class PipelineRunner:
             logger.warning("People detection failed (non-fatal): %s", exc)
         return result
 
-    def run(self, url_or_id: str) -> PipelineOutputs:
+    def run(self, url_or_id: str, detect_people: bool = True) -> PipelineOutputs:
         video_id = extract_video_id(url_or_id)
         metadata = self.fetch_metadata(video_id)
         segments = self.fetcher.fetch(video_id)
@@ -167,7 +167,7 @@ class PipelineRunner:
 
         sentiments = self.sentiment_analyzer.analyze(chunks)
         sentiment_rollup = self.sentiment_analyzer.aggregate(sentiments)
-        people = self._detect_people(chunks)
+        people = self._detect_people(chunks) if detect_people else {}
 
         return PipelineOutputs(
             video_id=video_id,
@@ -180,7 +180,7 @@ class PipelineRunner:
             people=people,
         )
 
-    def run_multi(self, urls: List[str], progress: Callable[[str], None] | None = None) -> List["PipelineOutputs"]:
+    def run_multi(self, urls: List[str], progress: Callable[[str], None] | None = None, detect_people: bool = True) -> List["PipelineOutputs"]:
         """Run pipeline across multiple videos with a single shared topic model."""
         def _prog(msg: str) -> None:
             if progress:
@@ -220,8 +220,11 @@ class PipelineRunner:
         _prog(f"Running sentiment on {len(all_chunks)} chunks…")
         sentiments_combined = self.sentiment_analyzer.analyze(all_chunks)
 
-        _prog("Detecting people…")
-        people_combined = self._detect_people(all_chunks)
+        if detect_people:
+            _prog("Detecting people…")
+            people_combined = self._detect_people(all_chunks)
+        else:
+            people_combined = {}
 
         # --- split back per video ---
         outputs: List[PipelineOutputs] = []
