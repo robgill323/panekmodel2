@@ -58,9 +58,15 @@ STOP_WORDS = ENGLISH_STOP_WORDS.union(_SPOKEN_STOPWORDS)
 
 
 class TopicModeler:
-    def __init__(self, embedding_model: str = "all-mpnet-base-v2", reduce_to: int = 10):
+    def __init__(
+        self,
+        embedding_model: str = "all-mpnet-base-v2",
+        reduce_to: int = 10,
+        extra_stop_words: List[str] | None = None,
+    ):
         self.embedding_model_name = embedding_model
         self.reduce_to = reduce_to
+        self.extra_stop_words: List[str] = [w.lower().strip() for w in (extra_stop_words or []) if w.strip()]
         self.model: BERTopic | None = None
         self._embedder: SentenceTransformer | None = None
 
@@ -154,8 +160,9 @@ class TopicModeler:
         if (isinstance(max_df, (int, float)) and isinstance(min_df, (int, float)) and max_df < min_df):
             max_df = 1.0
             min_df = 1
+        effective_stop_words = STOP_WORDS.union(self.extra_stop_words)
         vectorizer_model = CountVectorizer(
-            stop_words=list(STOP_WORDS),
+            stop_words=list(effective_stop_words),
             ngram_range=(1, 2),
             min_df=min_df,
             max_df=max_df,
@@ -203,6 +210,17 @@ class TopicModeler:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Outlier reduction failed (non-fatal): %s", exc)
 
+        # Refresh topic representations with the effective stop-word list so
+        # that any user-supplied words are stripped from final keyword labels.
+        try:
+            topic_model.update_topics(
+                texts,
+                topics=topic_model.topics_,
+                vectorizer_model=vectorizer_model,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("update_topics after stopword refresh failed (non-fatal): %s", exc)
+
         self.model = topic_model
         return topic_model, topics, probs
 
@@ -222,7 +240,7 @@ class TopicModeler:
                 "crosstalk", "inaudible",
                 "sighs", "sigh",
                 "music", "beep",
-            }
+            } | set(self.extra_stop_words)
             clean = [
                 w for w, _ in words
                 if w.strip("_") != "" and "__" not in w and w not in _noise

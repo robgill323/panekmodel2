@@ -1,6 +1,6 @@
 import os
 from functools import lru_cache
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     sentiment_batch_size: int = Field(default=16, description="Batch size for sentiment inference.")
     cuda: bool = Field(default=False, description="Force CUDA usage when available.")
     hf_token: Optional[str] = Field(default=None, description="Hugging Face token for HF Hub downloads.")
+    custom_stopwords: List[str] = Field(
+        default_factory=list,
+        description="Extra words to strip from topic keyword lists (additive to built-in spoken stopwords).",
+    )
 
     class Config:
         env_prefix = ""

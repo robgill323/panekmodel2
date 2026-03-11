@@ -122,6 +122,13 @@ with st.form("run-form"):
         sentiment_model = st.text_input("Sentiment model", value=base.sentiment_model)
         embedding_model = st.text_input("Embedding model", value=base.embedding_model)
 
+    custom_stopwords_raw = st.text_area(
+        "Additional stopwords (comma or newline separated)",
+        placeholder="e.g. joe, rogan, bro, dude",
+        help="Words to remove from topic keyword labels on every run. Added on top of the built-in spoken-word stoplist.",
+        height=68,
+    )
+
     submitted = st.form_submit_button("Run pipeline", type="primary")
 
 if submitted:
@@ -139,6 +146,11 @@ if submitted:
             "topic_reduce_to": int(topic_reduce_to),
             "sentiment_model": sentiment_model,
             "embedding_model": embedding_model,
+            "custom_stopwords": [
+                w.strip().lower()
+                for w in custom_stopwords_raw.replace(",", "\n").splitlines()
+                if w.strip()
+            ],
         }
         data = base.model_dump()
         data.update(overrides)
@@ -203,18 +215,18 @@ if st.session_state.get("video_choices"):
 
             # Build keyword labels for each topic from the shared model
             topic_labels = {}
+            _cv_noise = {
+                "__", "_", "",
+                "laughter", "laughing", "laughs",
+                "applause", "clapping",
+                "clears throat", "throat",
+                "crosstalk", "inaudible",
+                "sighs", "sigh", "music", "beep",
+            } | set(runner.topic_modeler.extra_stop_words)
             for tid in all_topic_ids:
-                _kw_noise = {
-                    "__", "_", "",
-                    "laughter", "laughing", "laughs",
-                    "applause", "clapping",
-                    "clears throat", "throat",
-                    "crosstalk", "inaudible",
-                    "sighs", "sigh", "music", "beep",
-                }
                 kws = [
                     kw for kw, _ in (runner.topic_modeler.model.get_topic(tid) or [])
-                    if kw.strip("_") != "" and "__" not in kw and kw not in _kw_noise
+                    if kw.strip("_") != "" and "__" not in kw and kw not in _cv_noise
                 ][:4]
                 topic_labels[tid] = f"T{tid}: {', '.join(kws)}" if kws else f"T{tid}"
 
@@ -263,28 +275,58 @@ if st.session_state.get("video_choices"):
             )
             st.plotly_chart(fig_hm, use_container_width=True)
 
-            # Shared-topic summary table
+            # Shared-topic summary table with navigation buttons
             shared = [
                 {
-                    "topic": topic_labels[tid],
-                    "videos": ", ".join(
-                        vc["title"][:25]
-                        for vc in video_choices
+                    "topic_label": topic_labels[tid],
+                    "topic_id": tid,
+                    "col_idx": c,
+                    "videos": [
+                        vc for vc in video_choices
                         if (vc["outputs"].topics_df["topic"] == tid).any()
-                    ),
+                    ],
                     "total_chunks": sum(z[r][c] for r, c in enumerate([all_topic_ids.index(tid)] * len(video_choices))),
                 }
                 for c, tid in enumerate(all_topic_ids)
                 if sum(1 for vc in video_choices if (vc["outputs"].topics_df["topic"] == tid).any()) > 1
             ]
             if shared:
-                st.markdown("**Topics shared across multiple videos:**")
-                st.dataframe(pd.DataFrame(shared), use_container_width=True, hide_index=True)
+                st.markdown("**Topics shared across multiple videos — click a video to jump to its Preview:**")
+                for row in shared:
+                    cols = st.columns([2] + [1] * len(row["videos"]))
+                    cols[0].markdown(f"**{row['topic_label']}** ({row['total_chunks']} chunks)")
+                    for ci, vc in enumerate(row["videos"]):
+                        tid = row["topic_id"]
+                        # Find earliest chunk timestamp for this topic in this video
+                        tdf = vc["outputs"].topics_df
+                        topic_chunks = tdf[tdf["topic"] == tid].sort_values("start")
+                        jump_t = float(topic_chunks.iloc[0]["start"]) if not topic_chunks.empty else 0.0
+                        btn_label = f"▶ {vc['title'][:22]} @ {fmt_ts(jump_t)}"
+                        if cols[ci + 1].button(btn_label, key=f"nav_{tid}_{vc['outputs'].video_id}"):
+                            st.session_state["_nav_video_label"] = vc["label"]
+                            st.session_state["_nav_preview_time"] = jump_t
+                            st.session_state["last_video_id"] = None  # force preview reset
+                            st.rerun()
             else:
                 st.info("No topics are shared across multiple videos in this run.")
 
     st.divider()
-    selection_label = st.selectbox("Select video", [c["label"] for c in video_choices])
+
+    # Apply any topic-click navigation before rendering the selectbox
+    if st.session_state.get("_nav_video_label"):
+        st.session_state["video_select"] = st.session_state.pop("_nav_video_label")
+        st.session_state["_nav_toast"] = True
+    if st.session_state.get("_nav_preview_time") is not None:
+        st.session_state["preview_time"] = st.session_state.pop("_nav_preview_time")
+
+    selection_label = st.selectbox(
+        "Select video",
+        [c["label"] for c in video_choices],
+        key="video_select",
+    )
+
+    if st.session_state.pop("_nav_toast", False):
+        st.toast("Topic navigation applied — click the **Preview** tab to watch", icon="▶")
     selected = next(c for c in video_choices if c["label"] == selection_label)
     outputs = selected["outputs"]
     video_title = selected["title"]
@@ -324,6 +366,31 @@ if st.session_state.get("video_choices"):
             st.dataframe(pd.DataFrame(topic_rows))
         else:
             st.info("No topics found (possibly too few chunks or all outliers). Try reducing chunk sizes.")
+
+        # ── People detected per topic ──────────────────────────────────────────
+        if outputs.people:
+            # Build topic_id → set of unique person names
+            topic_people: dict = {}
+            for chunk_idx, names in outputs.people.items():
+                tr = outputs.topics_df[outputs.topics_df["chunk_index"] == chunk_idx]
+                tid = int(tr.iloc[0]["topic"]) if not tr.empty else -1
+                if tid not in topic_people:
+                    topic_people[tid] = set()
+                topic_people[tid].update(names)
+
+            with st.expander("People detected per topic", expanded=False):
+                # Overall unique people first
+                all_people = sorted({n for names in outputs.people.values() for n in names})
+                st.caption(f"**All people mentioned ({len(all_people)}):** {', '.join(all_people)}")
+                st.divider()
+                for t in sorted(topic_people):
+                    if t == -1:
+                        label = "Outlier / Unassigned"
+                    else:
+                        kws = next((x["keywords"] for x in topic_summary if x["topic_id"] == t), [])
+                        label = f"Topic {t}: {', '.join(kws[:4])}" if kws else f"Topic {t}"
+                    st.markdown(f"**{label}**")
+                    st.write(", ".join(sorted(topic_people[t])))
 
     with tabs[2]:
         roll = outputs.sentiment_rollup

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
 import pandas as pd
@@ -31,6 +31,8 @@ class PipelineOutputs:
     topics_df: pd.DataFrame
     sentiments: List[SentimentResult]
     sentiment_rollup: Dict
+    # chunk_index → list of PERSON names detected in that chunk
+    people: Dict[int, List[str]] = field(default_factory=dict)
 
 
 def extract_video_id(url_or_id: str) -> str:
@@ -50,7 +52,9 @@ class PipelineRunner:
         self.settings = settings or get_settings()
         self.fetcher = TranscriptFetcher(self.settings)
         self.topic_modeler = TopicModeler(
-            embedding_model=self.settings.embedding_model, reduce_to=self.settings.topic_reduce_to
+            embedding_model=self.settings.embedding_model,
+            reduce_to=self.settings.topic_reduce_to,
+            extra_stop_words=list(self.settings.custom_stopwords),
         )
         self.sentiment_analyzer = SentimentAnalyzer(
             model_name=self.settings.sentiment_model,
@@ -98,6 +102,56 @@ class PipelineRunner:
 
         return {}
 
+    @staticmethod
+    def _detect_people(chunks: List[Chunk]) -> Dict[int, List[str]]:
+        """Use NLTK NER to find PERSON entities in each chunk.
+
+        Returns a mapping of chunk_index → [name, ...].  Quietly degrades
+        if NLTK data is missing rather than crashing the pipeline.
+        """
+        try:
+            import nltk  # noqa: PLC0415
+            nltk.data.find("tokenizers/punkt")
+            nltk.data.find("taggers/averaged_perceptron_tagger")
+            nltk.data.find("chunkers/maxent_ne_chunker")
+            nltk.data.find("corpora/words")
+        except LookupError:
+            logger.info("NLTK data not fully available; downloading for people detection…")
+            import nltk  # noqa: PLC0415
+            for pkg in ("punkt", "punkt_tab", "averaged_perceptron_tagger",
+                        "averaged_perceptron_tagger_eng",
+                        "maxent_ne_chunker", "maxent_ne_chunker_tab", "words"):
+                try:
+                    nltk.download(pkg, quiet=True)
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception:  # noqa: BLE001
+            pass
+
+        result: Dict[int, List[str]] = {}
+        try:
+            import nltk  # noqa: PLC0415
+            for idx, chunk in enumerate(chunks):
+                names: List[str] = []
+                try:
+                    tokens = nltk.word_tokenize(chunk.text)
+                    tagged = nltk.pos_tag(tokens)
+                    tree = nltk.ne_chunk(tagged)
+                    seen: set = set()
+                    for subtree in tree:
+                        if hasattr(subtree, "label") and subtree.label() == "PERSON":
+                            name = " ".join(leaf[0] for leaf in subtree.leaves())
+                            if name and name not in seen:
+                                seen.add(name)
+                                names.append(name)
+                except Exception:  # noqa: BLE001
+                    pass
+                if names:
+                    result[idx] = names
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("People detection failed (non-fatal): %s", exc)
+        return result
+
     def run(self, url_or_id: str) -> PipelineOutputs:
         video_id = extract_video_id(url_or_id)
         metadata = self.fetch_metadata(video_id)
@@ -113,6 +167,7 @@ class PipelineRunner:
 
         sentiments = self.sentiment_analyzer.analyze(chunks)
         sentiment_rollup = self.sentiment_analyzer.aggregate(sentiments)
+        people = self._detect_people(chunks)
 
         return PipelineOutputs(
             video_id=video_id,
@@ -122,6 +177,7 @@ class PipelineRunner:
             topics_df=topics_df,
             sentiments=sentiments,
             sentiment_rollup=sentiment_rollup,
+            people=people,
         )
 
     def run_multi(self, urls: List[str], progress: Callable[[str], None] | None = None) -> List["PipelineOutputs"]:
@@ -164,6 +220,9 @@ class PipelineRunner:
         _prog(f"Running sentiment on {len(all_chunks)} chunks…")
         sentiments_combined = self.sentiment_analyzer.analyze(all_chunks)
 
+        _prog("Detecting people…")
+        people_combined = self._detect_people(all_chunks)
+
         # --- split back per video ---
         outputs: List[PipelineOutputs] = []
         for v, (s, e) in zip(per_video, slices):
@@ -171,6 +230,12 @@ class PipelineRunner:
             v_topics_df = topics_df_combined.iloc[s:e].reset_index(drop=True)
             v_sentiments = sentiments_combined[s:e]
             v_rollup = self.sentiment_analyzer.aggregate(v_sentiments)
+            # Re-index people dict to per-video chunk indices (0-based)
+            v_people = {
+                i - s: names
+                for i, names in people_combined.items()
+                if s <= i < e
+            }
             outputs.append(
                 PipelineOutputs(
                     video_id=v["video_id"],
@@ -180,6 +245,7 @@ class PipelineRunner:
                     topics_df=v_topics_df,
                     sentiments=v_sentiments,
                     sentiment_rollup=v_rollup,
+                    people=v_people,
                 )
             )
         _prog("Done.")
@@ -200,25 +266,27 @@ class PipelineRunner:
     })
 
     @staticmethod
-    def _clean_kws(raw: list, top_n: int) -> list:
+    def _clean_kws(raw: list, top_n: int, extra_noise: frozenset | None = None) -> list:
         """Strip noise tokens and return up to *top_n* clean keywords."""
+        noise = PipelineRunner._NOISE_TOKENS | (extra_noise or frozenset())
         return [
             kw for kw, _ in raw
             if (
                 kw.strip("_") != ""
                 and "__" not in kw           # catches 'laughter __', 'word__word'
-                and kw not in PipelineRunner._NOISE_TOKENS
+                and kw not in noise
             )
         ][:top_n]
 
     def summarize_topics(self, outputs: PipelineOutputs, top_n: int = 5) -> List[dict]:
         summary = []
+        _extra = frozenset(self.topic_modeler.extra_stop_words)
         for topic_id, group in outputs.topics_df.groupby("topic"):
             if topic_id == -1:
                 continue
             # Fetch extra candidates so noise removal doesn't shrink the list.
             raw = self.topic_modeler.model.get_topic(topic_id) or []
-            keywords = self._clean_kws(raw, top_n)
+            keywords = self._clean_kws(raw, top_n, extra_noise=_extra)
             sample_chunk = group.sort_values("prob", ascending=False).iloc[0]
             summary.append(
                 {
