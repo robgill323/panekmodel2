@@ -53,7 +53,12 @@ def run(
         settings = Settings(**{**settings.model_dump(), "topic_reduce_to": topic_reduce_to})
     runner = PipelineRunner(settings)
 
-    all_outputs = runner.run_multi(urls) if len(urls) > 1 else [runner.run(urls[0])]
+    if len(urls) > 1:
+        all_outputs, cli_failures = runner.run_multi(urls)
+        for url, exc in cli_failures:
+            console.print(f"[yellow]⚠ Skipped {url}: {exc}[/yellow]")
+    else:
+        all_outputs = [runner.run(urls[0])]
 
     if len(all_outputs) > 1:
         console.rule("[bold]Shared Topic Model")

@@ -253,8 +253,18 @@ class PipelineRunner:
             people=people,
         )
 
-    def run_multi(self, urls: List[str], progress: Callable[[str], None] | None = None, detect_people: bool = True) -> List["PipelineOutputs"]:
-        """Run pipeline across multiple videos with a single shared topic model."""
+    def run_multi(
+        self,
+        urls: List[str],
+        progress: Callable[[str], None] | None = None,
+        detect_people: bool = True,
+    ) -> tuple[List["PipelineOutputs"], List[tuple[str, Exception]]]:
+        """Run pipeline across multiple videos with a single shared topic model.
+
+        Returns ``(outputs, failures)`` where ``failures`` is a list of
+        ``(url, exception)`` pairs for videos that could not be processed.
+        Successfully processed videos are always returned even when some fail.
+        """
         def _prog(msg: str) -> None:
             if progress:
                 progress(msg)
@@ -271,36 +281,50 @@ class PipelineRunner:
 
         # --- fetch, chunk, embed, and score sentiment per video (cached) ---
         per_video: List[dict] = []
+        failures: List[tuple[str, Exception]] = []
         for url in urls:
-            video_id = extract_video_id(url)
-            cached = cache.load(video_id, cache_key)
-            if cached:
-                _prog(f"{video_id}: loaded from cache ({len(cached['chunks'])} chunks)")
-                per_video.append(cached)
+            try:
+                video_id = extract_video_id(url)
+            except Exception as exc:  # noqa: BLE001
+                _prog(f"⚠ Skipping {url!r}: {exc}")
+                failures.append((url, exc))
                 continue
+            try:
+                cached = cache.load(video_id, cache_key)
+                if cached:
+                    _prog(f"{video_id}: loaded from cache ({len(cached['chunks'])} chunks)")
+                    per_video.append(cached)
+                    continue
 
-            _prog(f"Fetching transcript: {video_id}")
-            metadata = self.fetch_metadata(video_id)
-            segments = self.fetcher.fetch(video_id)
-            chunks = chunk_segments(
-                segments,
-                max_words=self.settings.chunk_max_words,
-                max_seconds=self.settings.chunk_max_seconds,
-            )
-            _prog(f"{video_id}: {len(segments)} segments → {len(chunks)} chunks — embedding…")
-            embeddings = self.topic_modeler.embed_chunks(chunks)
-            _prog(f"{video_id}: running sentiment…")
-            sentiments = self.sentiment_analyzer.analyze(chunks)
-            entry = {
-                "video_id": video_id,
-                "metadata": metadata,
-                "segments": segments,
-                "chunks": chunks,
-                "embeddings": embeddings,
-                "sentiments": sentiments,
-            }
-            cache.save(video_id, cache_key, entry)
-            per_video.append(entry)
+                _prog(f"Fetching transcript: {video_id}")
+                metadata = self.fetch_metadata(video_id)
+                segments = self.fetcher.fetch(video_id)
+                chunks = chunk_segments(
+                    segments,
+                    max_words=self.settings.chunk_max_words,
+                    max_seconds=self.settings.chunk_max_seconds,
+                )
+                _prog(f"{video_id}: {len(segments)} segments → {len(chunks)} chunks — embedding…")
+                embeddings = self.topic_modeler.embed_chunks(chunks)
+                _prog(f"{video_id}: running sentiment…")
+                sentiments = self.sentiment_analyzer.analyze(chunks)
+                entry = {
+                    "video_id": video_id,
+                    "metadata": metadata,
+                    "segments": segments,
+                    "chunks": chunks,
+                    "embeddings": embeddings,
+                    "sentiments": sentiments,
+                }
+                cache.save(video_id, cache_key, entry)
+                per_video.append(entry)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Skipping %s due to error: %s", video_id, exc)
+                _prog(f"⚠ Skipping {video_id}: {exc}")
+                failures.append((url, exc))
+
+        if not per_video:
+            return [], failures
 
         # --- combine all chunks + embeddings and fit ONE shared topic model ---
         all_chunks: List[Chunk] = []
@@ -353,7 +377,7 @@ class PipelineRunner:
                 )
             )
         _prog("Done.")
-        return outputs
+        return outputs, failures
 
     # Tokens that carry no semantic meaning and should never appear in topic
     # keyword lists.  Includes SentencePiece underscore artifacts, transcript

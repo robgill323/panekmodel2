@@ -191,8 +191,9 @@ if submitted:
                     run_status.write(msg)
 
                 if len(urls) > 1:
-                    all_outputs = runner.run_multi(urls, progress=_progress, detect_people=detect_people)
+                    all_outputs, run_failures = runner.run_multi(urls, progress=_progress, detect_people=detect_people)
                     results = list(zip(urls, all_outputs))
+                    failures.extend(run_failures)
                 else:
                     _progress(f"Fetching transcript: {urls[0]}")
                     outputs = runner.run(urls[0], detect_people=detect_people)
@@ -201,11 +202,10 @@ if submitted:
 
                 run_status.update(label="Pipeline complete!", state="complete")
         except Exception as exc:  # noqa: BLE001
-            failures = [(urls, exc)]
-            results = []
+            failures.append(("pipeline", exc))
 
-        if failures:
-            st.error({"failed": [(str(u), str(e)) for u, e in failures]})
+        for _url, _exc in failures:
+            st.warning(f"⚠ Skipped {_url}: {_exc}")
 
         if not results:
             st.stop()
