@@ -1,7 +1,8 @@
 import logging
 import re
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 from bertopic import BERTopic
 from bertopic.representation import KeyBERTInspired
@@ -77,6 +78,17 @@ class TopicModeler:
             self._embedder = SentenceTransformer(self.embedding_model_name)
         return self._embedder
 
+    def embed_chunks(self, chunks: List[Chunk]) -> np.ndarray:
+        """Compute sentence embeddings for chunks without running the full topic model.
+
+        Returns a float32 numpy array of shape (len(chunks), embedding_dim).
+        Results can be cached and passed back to fit() to skip re-embedding.
+        """
+        texts = [self._clean_text(c.text) for c in chunks]
+        embedder = self._get_embedder()
+        logger.info("Embedding %d chunks with %s", len(texts), self.embedding_model_name)
+        return embedder.encode(texts, show_progress_bar=False, convert_to_numpy=True)
+
     @staticmethod
     def _clean_text(text: str) -> str:
         # Light normalization to help topic quality without harming meaning
@@ -89,7 +101,11 @@ class TopicModeler:
         text = re.sub(r"\s+", " ", text).strip()
         return text
 
-    def fit(self, chunks: List[Chunk]) -> Tuple[BERTopic, List[int], List[float]]:
+    def fit(
+        self,
+        chunks: List[Chunk],
+        embeddings: Optional[np.ndarray] = None,
+    ) -> Tuple[BERTopic, List[int], List[float]]:
         texts = [self._clean_text(c.text) for c in chunks]
         embedder = self._get_embedder()
 
@@ -181,7 +197,7 @@ class TopicModeler:
             language="english",
             verbose=False,
         )
-        topics, probs = topic_model.fit_transform(texts)
+        topics, probs = topic_model.fit_transform(texts, embeddings=embeddings)
 
         reduce_target = self.reduce_to if (self.reduce_to and self.reduce_to < n_samples) else None
         if reduce_target and len(set(t for t in topics if t != -1)) > reduce_target:
@@ -199,7 +215,8 @@ class TopicModeler:
         if n_outliers > 0 and n_real_topics > 0:
             try:
                 topics = topic_model.reduce_outliers(
-                    texts, topics, strategy="embeddings", threshold=0.4
+                    texts, topics, strategy="embeddings", threshold=0.4,
+                    embeddings=embeddings,
                 )
                 topic_model.update_topics(
                     texts, topics=topics, vectorizer_model=vectorizer_model

@@ -102,6 +102,12 @@ with st.form("run-form"):
         placeholder="https://www.youtube.com/watch?v=...\nhttps://youtu.be/...",
         key="urls",
     )
+    csv_file = st.file_uploader(
+        "…or upload a CSV file of URLs",
+        type="csv",
+        help="CSV must contain a column named 'url' or 'id'. Any extra columns are ignored.",
+        key="csv_upload",
+    )
 
     col1, col2, col3 = st.columns(3)
     base = get_settings()
@@ -139,6 +145,20 @@ with st.form("run-form"):
 
 if submitted:
     urls = parse_urls(urls_raw)
+    if csv_file is not None:
+        try:
+            _csv_df = pd.read_csv(csv_file)
+            _col = next(
+                (c for c in _csv_df.columns if c.strip().lower() in ("url", "id", "video_id", "link")),
+                None,
+            )
+            if _col:
+                _csv_urls = [str(v).strip() for v in _csv_df[_col].dropna() if str(v).strip()]
+                urls = list(dict.fromkeys(urls + _csv_urls))  # merge, deduplicate, preserve order
+            else:
+                st.warning("CSV uploaded but no 'url' or 'id' column found — ignoring file.")
+        except Exception as _csv_err:
+            st.warning(f"Could not read CSV: {_csv_err}")
     if not urls:
         st.error("Please provide at least one YouTube URL or ID.")
     else:
@@ -379,6 +399,38 @@ if st.session_state.get("video_choices"):
             st.divider()
             all_people = sorted({n for ns in outputs.people.values() for n in ns})
             st.markdown(f"**People mentioned ({len(all_people)}):** {', '.join(all_people)}")
+
+        st.divider()
+        st.markdown("**Export**")
+        _export_rows = []
+        for _i, (_chunk, _sent) in enumerate(zip(outputs.chunks, outputs.sentiments)):
+            _tr = outputs.topics_df[outputs.topics_df["chunk_index"] == _i]
+            _tid_ex = int(_tr.iloc[0]["topic"]) if not _tr.empty else -1
+            _kws_ex = ", ".join(_kw_map.get(_tid_ex, []))
+            _people_ex = ", ".join(outputs.people.get(_i, []))
+            _norm = _sent.score * (1 if _sent.label.lower().startswith("pos") else -1)
+            _export_rows.append({
+                "video_id":          outputs.video_id,
+                "video_title":       meta.get("title", ""),
+                "chunk_index":       _i,
+                "start_s":           round(_chunk.start, 2),
+                "end_s":             round(_chunk.end, 2),
+                "text":              _chunk.text,
+                "topic_id":          _tid_ex,
+                "topic_keywords":    _kws_ex,
+                "sentiment_label":   _sent.label,
+                "sentiment_score":   round(_sent.score, 4),
+                "sentiment_normed":  round(_norm, 4),
+                "people":            _people_ex,
+            })
+        _export_csv = pd.DataFrame(_export_rows).to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="⬇ Download full analysis (CSV)",
+            data=_export_csv,
+            file_name=f"{outputs.video_id}_analysis.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
     # ── Tab 1 · Topics ───────────────────────────────────────────────────────
     with tabs[1]:

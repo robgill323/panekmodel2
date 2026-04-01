@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import logging
+import pickle
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+import numpy as np
 import pandas as pd
 from googleapiclient.discovery import build
 
@@ -20,6 +24,51 @@ from .topic_model import TopicModeler
 from .transcript_fetcher import TranscriptFetcher, TranscriptSegment
 
 logger = logging.getLogger(__name__)
+
+
+class VideoCache:
+    """Disk cache for per-video transcript, embeddings, and sentiment.
+
+    Cache key covers chunk settings + model names so changing any of those
+    automatically invalidates the cache for all videos.
+
+    Topics are intentionally NOT cached because BERTopic fits a shared model
+    across the full batch — adding one new video changes everyone's topics.
+    Only the inputs to topic modelling (embeddings) and the independent
+    per-chunk outputs (sentiments) are safe to cache.
+    """
+
+    def __init__(self, cache_dir: Path | None = None):
+        self.cache_dir = cache_dir or (Path.home() / ".panekmodel2_cache")
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _path(self, video_id: str, key: str) -> Path:
+        return self.cache_dir / f"{video_id}_{key}.pkl"
+
+    def load(self, video_id: str, key: str) -> dict | None:
+        p = self._path(video_id, key)
+        if p.exists():
+            try:
+                with open(p, "rb") as fh:
+                    return pickle.load(fh)
+            except Exception:
+                p.unlink(missing_ok=True)
+        return None
+
+    def save(self, video_id: str, key: str, data: dict) -> None:
+        p = self._path(video_id, key)
+        with open(p, "wb") as fh:
+            pickle.dump(data, fh)
+
+    @staticmethod
+    def make_key(
+        chunk_max_words: int,
+        chunk_max_seconds: int,
+        embedding_model: str,
+        sentiment_model: str,
+    ) -> str:
+        raw = f"{chunk_max_words}|{chunk_max_seconds}|{embedding_model}|{sentiment_model}"
+        return hashlib.md5(raw.encode()).hexdigest()[:10]
 
 
 @dataclass
@@ -154,18 +203,42 @@ class PipelineRunner:
 
     def run(self, url_or_id: str, detect_people: bool = True) -> PipelineOutputs:
         video_id = extract_video_id(url_or_id)
-        metadata = self.fetch_metadata(video_id)
-        segments = self.fetcher.fetch(video_id)
-        chunks = chunk_segments(
-            segments,
-            max_words=self.settings.chunk_max_words,
-            max_seconds=self.settings.chunk_max_seconds,
+        cache = VideoCache()
+        cache_key = VideoCache.make_key(
+            self.settings.chunk_max_words,
+            self.settings.chunk_max_seconds,
+            self.settings.embedding_model,
+            self.settings.sentiment_model,
         )
+        cached = cache.load(video_id, cache_key)
+        if cached:
+            logger.info("%s: loaded transcript + embeddings + sentiments from cache", video_id)
+            metadata = cached["metadata"]
+            segments = cached["segments"]
+            chunks   = cached["chunks"]
+            embeddings = cached["embeddings"]
+            sentiments = cached["sentiments"]
+        else:
+            metadata = self.fetch_metadata(video_id)
+            segments = self.fetcher.fetch(video_id)
+            chunks = chunk_segments(
+                segments,
+                max_words=self.settings.chunk_max_words,
+                max_seconds=self.settings.chunk_max_seconds,
+            )
+            embeddings = self.topic_modeler.embed_chunks(chunks)
+            sentiments = self.sentiment_analyzer.analyze(chunks)
+            cache.save(video_id, cache_key, {
+                "metadata": metadata,
+                "segments": segments,
+                "chunks": chunks,
+                "embeddings": embeddings,
+                "sentiments": sentiments,
+            })
 
-        topic_model, topics, probs = self.topic_modeler.fit(chunks)
+        topic_model, topics, probs = self.topic_modeler.fit(chunks, embeddings=embeddings)
         topics_df = self.topic_modeler.topic_dataframe(chunks, topics, probs)
 
-        sentiments = self.sentiment_analyzer.analyze(chunks)
         sentiment_rollup = self.sentiment_analyzer.aggregate(sentiments)
         people = self._detect_people(chunks) if detect_people else {}
 
@@ -188,10 +261,24 @@ class PipelineRunner:
             else:
                 logger.info(msg)
 
-        # --- fetch & chunk each video independently ---
+        cache = VideoCache()
+        cache_key = VideoCache.make_key(
+            self.settings.chunk_max_words,
+            self.settings.chunk_max_seconds,
+            self.settings.embedding_model,
+            self.settings.sentiment_model,
+        )
+
+        # --- fetch, chunk, embed, and score sentiment per video (cached) ---
         per_video: List[dict] = []
         for url in urls:
             video_id = extract_video_id(url)
+            cached = cache.load(video_id, cache_key)
+            if cached:
+                _prog(f"{video_id}: loaded from cache ({len(cached['chunks'])} chunks)")
+                per_video.append(cached)
+                continue
+
             _prog(f"Fetching transcript: {video_id}")
             metadata = self.fetch_metadata(video_id)
             segments = self.fetcher.fetch(video_id)
@@ -200,25 +287,39 @@ class PipelineRunner:
                 max_words=self.settings.chunk_max_words,
                 max_seconds=self.settings.chunk_max_seconds,
             )
-            per_video.append(
-                {"video_id": video_id, "metadata": metadata, "segments": segments, "chunks": chunks}
-            )
-            _prog(f"{video_id}: {len(segments)} segments → {len(chunks)} chunks")
+            _prog(f"{video_id}: {len(segments)} segments → {len(chunks)} chunks — embedding…")
+            embeddings = self.topic_modeler.embed_chunks(chunks)
+            _prog(f"{video_id}: running sentiment…")
+            sentiments = self.sentiment_analyzer.analyze(chunks)
+            entry = {
+                "video_id": video_id,
+                "metadata": metadata,
+                "segments": segments,
+                "chunks": chunks,
+                "embeddings": embeddings,
+                "sentiments": sentiments,
+            }
+            cache.save(video_id, cache_key, entry)
+            per_video.append(entry)
 
-        # --- combine all chunks and fit ONE shared topic model ---
+        # --- combine all chunks + embeddings and fit ONE shared topic model ---
         all_chunks: List[Chunk] = []
+        all_embeddings_list = []
         slices: List[tuple[int, int]] = []
         for v in per_video:
             start = len(all_chunks)
             all_chunks.extend(v["chunks"])
+            all_embeddings_list.append(v["embeddings"])
             slices.append((start, len(all_chunks)))
 
+        all_embeddings = np.vstack(all_embeddings_list)
+
         _prog(f"Fitting topic model on {len(all_chunks)} combined chunks…")
-        topic_model, topics, probs = self.topic_modeler.fit(all_chunks)
+        topic_model, topics, probs = self.topic_modeler.fit(all_chunks, embeddings=all_embeddings)
         topics_df_combined = self.topic_modeler.topic_dataframe(all_chunks, topics, probs)
 
-        _prog(f"Running sentiment on {len(all_chunks)} chunks…")
-        sentiments_combined = self.sentiment_analyzer.analyze(all_chunks)
+        # sentiments are already computed (cached per video) — just concatenate
+        sentiments_combined = [s for v in per_video for s in v["sentiments"]]
 
         if detect_people:
             _prog("Detecting people…")
