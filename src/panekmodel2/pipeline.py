@@ -87,13 +87,27 @@ class PipelineOutputs:
 def extract_video_id(url_or_id: str) -> str:
     if re.match(r"^[a-zA-Z0-9_-]{11}$", url_or_id):
         return url_or_id
+    # Standard watch URL: ?v=ID
     match = re.search(r"v=([a-zA-Z0-9_-]{11})", url_or_id)
     if match:
         return match.group(1)
+    # Shortened URL: youtu.be/ID
     match = re.search(r"youtu\.be/([a-zA-Z0-9_-]{11})", url_or_id)
     if match:
         return match.group(1)
-    raise ValueError("Could not extract video id")
+    # YouTube Shorts: /shorts/ID
+    match = re.search(r"youtube\.com/shorts/([a-zA-Z0-9_-]{11})", url_or_id)
+    if match:
+        return match.group(1)
+    # YouTube Live: /live/ID
+    match = re.search(r"youtube\.com/live/([a-zA-Z0-9_-]{11})", url_or_id)
+    if match:
+        return match.group(1)
+    # Embed URL: /embed/ID
+    match = re.search(r"youtube\.com/embed/([a-zA-Z0-9_-]{11})", url_or_id)
+    if match:
+        return match.group(1)
+    raise ValueError(f"Could not extract video id from: {url_or_id!r}")
 
 
 class PipelineRunner:

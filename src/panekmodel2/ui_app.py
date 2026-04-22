@@ -540,7 +540,32 @@ if st.session_state.get("video_choices"):
 
         st.divider()
 
-        # Chunk-level sentiment over time
+        # Pie chart — positive / neutral / negative breakdown
+        _pie_pos  = _frac2.get("positive", 0)
+        _pie_neg  = _frac2.get("negative", 0)
+        _pie_neu  = max(0.0, 1.0 - _pie_pos - _pie_neg)
+        _pie_vals = [_pie_pos, _pie_neu, _pie_neg]
+        _pie_labels = ["Positive", "Neutral", "Negative"]
+        if any(v > 0 for v in _pie_vals):
+            _pcol1, _pcol2 = st.columns([1, 2])
+            with _pcol1:
+                fig_pie = go.Figure(go.Pie(
+                    labels=_pie_labels,
+                    values=_pie_vals,
+                    marker_colors=["#22c55e", "#eab308", "#ef4444"],
+                    hole=0.4,
+                    textinfo="label+percent",
+                    hovertemplate="<b>%{label}</b><br>%{percent}<extra></extra>",
+                ))
+                fig_pie.update_layout(
+                    height=260,
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    showlegend=False,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                )
+                st.plotly_chart(fig_pie, use_container_width=True)
+
+        st.divider()
         if outputs.sentiments and outputs.chunks:
             _sent_df = pd.DataFrame([
                 {
