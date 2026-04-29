@@ -435,6 +435,39 @@ if st.session_state.get("video_choices"):
     # ── Tab 1 · Topics ───────────────────────────────────────────────────────
     with tabs[1]:
         if _topic_summary:
+            # Topic distribution pie chart
+            _tdist_rows = []
+            for _t in _topic_summary:
+                _tid = _t["topic_id"]
+                if _tid == -1:
+                    continue
+                _count = int((outputs.topics_df["topic"] == _tid).sum())
+                _label = ", ".join(_t["keywords"][:3]) or f"T{_tid}"
+                _tdist_rows.append({"label": f"T{_tid}: {_label}", "count": _count})
+            if _tdist_rows:
+                _tp_labels = [r["label"] for r in _tdist_rows]
+                _tp_values = [r["count"] for r in _tdist_rows]
+                _tp_colors = [
+                    "#6366f1","#22c55e","#f59e0b","#ef4444","#3b82f6",
+                    "#ec4899","#14b8a6","#f97316","#8b5cf6","#84cc16",
+                ]
+                fig_tdist = go.Figure(go.Pie(
+                    labels=_tp_labels,
+                    values=_tp_values,
+                    marker_colors=(_tp_colors * ((len(_tp_labels) // len(_tp_colors)) + 1))[:len(_tp_labels)],
+                    hole=0.35,
+                    textinfo="label+percent",
+                    hovertemplate="<b>%{label}</b><br>%{value} chunks (%{percent})<extra></extra>",
+                ))
+                fig_tdist.update_layout(
+                    height=380,
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    showlegend=False,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                )
+                st.plotly_chart(fig_tdist, use_container_width=True)
+                st.divider()
+
             for t in _topic_summary:
                 kw_str  = ", ".join(t["keywords"]) or "—"
                 ts_str  = f"{fmt_ts(t['representative']['start'])} – {fmt_ts(t['representative']['end'])}"
