@@ -5,6 +5,8 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from bertopic import BERTopic
+from bertopic.cluster import BaseCluster
+from bertopic.dimensionality import BaseDimensionalityReduction
 from bertopic.representation import KeyBERTInspired
 from hdbscan import HDBSCAN
 from sentence_transformers import SentenceTransformer
@@ -57,6 +59,13 @@ _SPOKEN_STOPWORDS: frozenset = frozenset({
 
 STOP_WORDS = ENGLISH_STOP_WORDS.union(_SPOKEN_STOPWORDS)
 
+# HDBSCAN's Boruxa KD-tree needs strictly more training points than its
+# neighbour count, so it raises below three chunks ("k must be less than or
+# equal to the number of training points"). A YouTube Short can easily produce
+# one or two chunks, and the topic model is fitted over the WHOLE batch — so an
+# unguarded crash here takes down every other video in the run.
+MIN_CLUSTERABLE_CHUNKS = 3
+
 
 class TopicModeler:
     def __init__(
@@ -107,13 +116,18 @@ class TopicModeler:
         embeddings: Optional[np.ndarray] = None,
     ) -> Tuple[BERTopic, List[int], List[float]]:
         texts = [self._clean_text(c.text) for c in chunks]
-        embedder = self._get_embedder()
-
-        logger.info("Fitting BERTopic on %d chunks", len(texts))
         n_samples = len(texts)
-
         if n_samples == 0:
+            # Checked before loading the embedder: there is nothing to model,
+            # so there is no reason to pull model weights first.
             raise ValueError("No chunks to model topics for")
+
+        logger.info("Fitting BERTopic on %d chunks", n_samples)
+
+        if n_samples < MIN_CLUSTERABLE_CHUNKS:
+            return self._fit_single_topic(texts, embeddings)
+
+        embedder = self._get_embedder()
 
         # Avoid UMAP spectral layout errors on very small corpora (k >= N)
         # by constraining neighbors/components to be < number of samples.
@@ -240,6 +254,40 @@ class TopicModeler:
 
         self.model = topic_model
         return topic_model, topics, probs
+
+    def _fit_single_topic(
+        self,
+        texts: List[str],
+        embeddings: Optional[np.ndarray],
+    ) -> Tuple[BERTopic, List[int], List[float]]:
+        """Assign one topic to a corpus too small to cluster.
+
+        Below :data:`MIN_CLUSTERABLE_CHUNKS`, UMAP and HDBSCAN have nothing to
+        work with. Rather than crash the whole batch (or invent structure that
+        is not there), put every chunk in topic 0 and let c-TF-IDF still derive
+        real keywords from the text. This is what a 30-second Short deserves:
+        one topic, honestly labelled.
+        """
+        n_samples = len(texts)
+        logger.info(
+            "Only %d chunk(s) — too few to cluster; assigning a single topic", n_samples
+        )
+        effective_stop_words = STOP_WORDS.union(self.extra_stop_words)
+        vectorizer_model = CountVectorizer(
+            stop_words=list(effective_stop_words), ngram_range=(1, 2), min_df=1, max_df=1.0
+        )
+        topic_model = BERTopic(
+            embedding_model=self._get_embedder(),
+            umap_model=BaseDimensionalityReduction(),
+            hdbscan_model=BaseCluster(),
+            vectorizer_model=vectorizer_model,
+            language="english",
+            verbose=False,
+        )
+        labels = [0] * n_samples
+        topics, _ = topic_model.fit_transform(texts, embeddings=embeddings, y=labels)
+        self.model = topic_model
+        return topic_model, list(topics), [1.0] * n_samples
 
     def describe_topics(self, top_n: int = 10) -> List[dict]:
         if self.model is None:

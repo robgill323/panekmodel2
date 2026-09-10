@@ -1,0 +1,94 @@
+evidence_bundle:
+  artifact: src/panekmodel2/server/static/app.js
+  produced_by: developer
+  worktree_ref: feature/throughline-frontend
+  items:
+    - id: E-1
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests -m "not slow"'
+      expect: {exit: 0}
+      cwd: "."
+
+    - id: E-2
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests/test_topic_model_small.py -m slow -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+
+    - id: E-3
+      kind: file-exists
+      paths:
+        - src/panekmodel2/server/__init__.py
+        - src/panekmodel2/server/app.py
+        - src/panekmodel2/server/jobs.py
+        - src/panekmodel2/server/results.py
+        - src/panekmodel2/server/exports.py
+        - src/panekmodel2/server/runners.py
+        - src/panekmodel2/server/static/index.html
+        - src/panekmodel2/server/static/app.js
+        - src/panekmodel2/server/static/styles.css
+
+    - id: E-4
+      kind: file-exists
+      paths:
+        - tests/conftest.py
+        - tests/test_pipeline.py
+        - tests/test_sentiment.py
+        - tests/test_server.py
+        - tests/test_topic_model_small.py
+
+    - id: E-5
+      kind: file-exists
+      paths:
+        - artifacts/design/throughline-v2-design.html
+
+    - id: E-6
+      kind: citation
+      ref: "src/panekmodel2/sentiment.py:46"
+      # normalize_sentiment — the single conversion from (label, score) to
+      # valence, replacing sentiment.py's label_map plus the three sign-flip
+      # re-derivations in ui_app.py (P0 #2).
+
+    - id: E-7
+      kind: citation
+      ref: "src/panekmodel2/pipeline.py:42"
+      # build_cache_entry + CACHE_VERSION — the one entry shape run() and
+      # run_multi() now share, versioned so pre-v2 entries are discarded
+      # instead of raising KeyError 'video_id' (P0 #1).
+
+    - id: E-8
+      kind: citation
+      ref: "src/panekmodel2/pipeline.py:122"
+      # URLOutcome / MultiRunResult — explicit per-URL analyzed/skipped record,
+      # so no caller pairs URLs to outputs positionally (P0 #3).
+
+    - id: E-9
+      kind: citation
+      ref: "src/panekmodel2/topic_model.py:67"
+      # MIN_CLUSTERABLE_CHUNKS — the tiny-corpus guard added after the n=1 and
+      # n=2 fits were observed to raise (see E-2 and the finding below).
+
+    - id: E-10
+      kind: citation
+      ref: "src/panekmodel2/cli.py:39"
+      # `panekmodel2 ui` — the launch entry point documented in README.md.
+
+    - id: E-11
+      kind: fixture-provenance
+      fixture: tests/conftest.py
+      synthetic: true
+      # FakeRunner stubs only fetch/embed/sentiment/topic-fit. Cache I/O,
+      # batching, per-URL outcome bookkeeping and chunk-index rebasing run the
+      # real code. No network and no model weights in the default suite.
+
+    - id: E-12
+      kind: human-attested
+      claim: "Every screen was rendered in headless Chrome against a live server and inspected - New run, Batch overview, Topics, Topic sentiment (light and dark), Video page, Export. The full-size Throughline (topic lane + sentiment ribbon, time axis, plus/minus 1 markers) and the micro-throughlines in the video list draw from real chunk data; the YouTube iframe embed loads and the three CSV exports download with correct headers."
+
+    - id: E-13
+      kind: assumed
+      claim: "Google Fonts (Source Serif 4, IBM Plex Sans/Mono) load over the network. They are not vendored; offline the page falls back to the Georgia / system-ui / ui-monospace stacks declared in styles.css, which was not verified with the network disabled."
+
+    - id: E-14
+      kind: assumed
+      claim: "The end-to-end path was exercised with the transcript fetch, embedding and sentiment stages stubbed. No run against live YouTube transcripts with the real siebert/mpnet weights was performed, so real-transcript topic quality and true wall-clock run times are unverified."

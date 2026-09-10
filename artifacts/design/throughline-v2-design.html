@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+--paper:#FAF8F4;--surface:#FFFFFF;--sunk:#F2EFE8;--line:#E2DED4;--line2:#CFC9BC;
+--ink:#1B1A17;--ink2:#57534B;--ink3:#8B857A;--accent:#1F4E5F;
+--pos:#14746F;--neg:#B4402F;--neu:#A29C91;--warn:#B8791F;
+}
+:root[data-theme="dark"]{
+--paper:#121311;--surface:#1A1C19;--sunk:#212320;--line:#2F332E;--line2:#454A43;
+--ink:#EDEAE3;--ink2:#B3AEA3;--ink3:#878176;--accent:#8FC7D6;
+--pos:#3AAFA2;--neg:#E0705C;--neu:#8A857C;--warn:#D9A441;
+}
+body{margin:0;background:var(--paper);}
+a{color:var(--accent);text-decoration:none;}
+a:hover{text-decoration:underline;}
+button,textarea,input,select{font:inherit;color:inherit;}
+::selection{background:#FFE9A8;color:#1B1A17;}
+@keyframes tlpulse{0%{opacity:.35}50%{opacity:1}100%{opacity:.35}}
+@keyframes tlbar{0%{background-position:0 0}100%{background-position:28px 0}}
+</style>
+</helmet>
+<div style="min-height:100vh;background:var(--paper);color:var(--ink);font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px;display:grid;grid-template-columns:214px minmax(0,1fr)">
+
+  <aside style="border-right:1px solid var(--line);padding:22px 0 40px;position:sticky;top:0;height:100vh;overflow:auto;background:var(--surface)">
+    <div style="padding:0 18px 18px;display:flex;align-items:center;gap:10px">
+      <div style="width:22px;height:22px;flex:none">{{ mark }}</div>
+      <div>
+        <div style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:18px;letter-spacing:-.01em;line-height:1">Throughline</div>
+        <div style="font:400 10px/1.4 'IBM Plex Mono',monospace;color:var(--ink3);letter-spacing:.08em;margin-top:3px">TRANSCRIPT TOPIC ANALYSIS</div>
+      </div>
+    </div>
+    <nav style="display:flex;flex-direction:column;gap:2px;padding:0 10px">
+      <sc-for list="{{ nav }}" as="n" hint-placeholder-count="8">
+        <button onClick="{{ n.go }}" style="{{ n.style }}" style-hover="background:var(--sunk)">
+          <span style="width:5px;height:5px;border-radius:50%;flex:none;background:{{ n.dot }}"></span>
+          <span style="flex:1;text-align:left">{{ n.label }}</span>
+          <span style="font:400 10px 'IBM Plex Mono',monospace;color:var(--ink3)">{{ n.tag }}</span>
+        </button>
+      </sc-for>
+    </nav>
+    <div style="margin:24px 18px 0;padding:14px;border:1px solid var(--line);border-radius:4px;background:var(--sunk)">
+      <div style="font:500 10px/1 'IBM Plex Mono',monospace;color:var(--ink3);letter-spacing:.1em;margin-bottom:8px">THIS SESSION</div>
+      <div style="font-size:12.5px;line-height:1.6;color:var(--ink2)">Run 14:02 · 11 videos<br>30 s chunks · MiniLM-L6<br>12 topics + outlier bin</div>
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:11.5px;line-height:1.5;color:var(--ink3)">Results are held in memory. Closing the app discards them — export before you quit.</div>
+    </div>
+  </aside>
+
+  <main style="min-width:0;display:flex;flex-direction:column">
+    <header style="position:sticky;top:0;z-index:30;display:flex;align-items:center;justify-content:space-between;gap:20px;padding:12px 34px;border-bottom:1px solid var(--line);background:var(--paper)">
+      <div style="display:flex;align-items:center;gap:8px;font:400 12px/1 'IBM Plex Mono',monospace;color:var(--ink3);flex-wrap:wrap">
+        <sc-for list="{{ crumbs }}" as="c" hint-placeholder-count="2">
+          <span style="display:flex;align-items:center;gap:8px">
+            <button onClick="{{ c.go }}" style="{{ c.style }}">{{ c.label }}</button>
+            <span style="color:var(--line2)">{{ c.sep }}</span>
+          </span>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="display:flex;align-items:center;gap:8px;font:400 11px/1 'IBM Plex Mono',monospace;color:var(--ink3);padding:6px 10px;border:1px solid var(--line);border-radius:3px">
+          <span style="width:6px;height:6px;border-radius:50%;background:var(--pos)"></span><span>{{ runTag }}</span>
+        </div>
+        <button onClick="{{ toggleTheme }}" style="display:flex;align-items:center;gap:7px;background:var(--surface);border:1px solid var(--line);border-radius:3px;padding:6px 11px;font:500 12px/1 'IBM Plex Sans',sans-serif;cursor:pointer" style-hover="border-color:var(--line2)">
+          <span style="width:9px;height:9px;border-radius:50%;border:1.5px solid var(--ink2);background:{{ themeDot }}"></span>
+          <span>{{ themeLabel }}</span>
+        </button>
+      </div>
+    </header>
+
+    <div style="padding:32px 34px 72px;min-width:0">
+
+      <!-- ═══ NEW RUN ═══ -->
+      <sc-if value="{{ isRun }}" hint-placeholder-val="{{ true }}">
+        <div style="display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:26px;align-items:start;max-width:1180px">
+          <div style="display:flex;flex-direction:column;gap:20px">
+            <div>
+              <div style="font:500 11px/1 'IBM Plex Mono',monospace;letter-spacing:.14em;color:var(--ink3)">NEW ANALYSIS RUN</div>
+              <h1 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:40px;line-height:1.08;letter-spacing:-.02em;margin:12px 0 8px">Paste the videos you want read.</h1>
+              <p style="margin:0;max-width:60ch;font-size:15px;line-height:1.6;color:var(--ink2);text-wrap:pretty">One URL per line — watch, Shorts and Live forms all work. One video is a perfectly good run: the topic model just fits over that single transcript.</p>
+            </div>
+
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:4px;overflow:hidden">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 16px;border-bottom:1px solid var(--line);background:var(--sunk)">
+                <span style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:var(--ink3)">VIDEO URLS</span>
+                <span style="font:400 11.5px 'IBM Plex Mono',monospace;color:var(--ink3)">{{ urlCount }}</span>
+              </div>
+              <textarea onChange="{{ onUrls }}" value="{{ urlText }}" spellcheck="false" style="width:100%;min-height:230px;resize:vertical;border:none;outline:none;background:var(--surface);color:var(--ink);padding:16px;font:400 13px/1.85 'IBM Plex Mono',monospace;box-sizing:border-box"></textarea>
+              <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line);flex-wrap:wrap">
+                <button style="display:flex;align-items:center;gap:8px;background:none;border:1px dashed var(--line2);border-radius:3px;padding:8px 12px;font:500 12.5px 'IBM Plex Sans',sans-serif;cursor:pointer" style-hover="background:var(--sunk)">
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:11px">CSV</span><span>Merge a URL column</span>
+                </button>
+                <span style="font-size:12px;color:var(--ink3);line-height:1.5">Uploaded rows are appended to the list above and de-duplicated — nothing is replaced.</span>
+              </div>
+            </div>
+
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:4px">
+              <button onClick="{{ toggleAdv }}" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;background:none;border:none;padding:15px 18px;cursor:pointer;text-align:left">
+                <span style="display:flex;flex-direction:column;gap:3px">
+                  <span style="font-size:13.5px;font-weight:600">Advanced settings</span>
+                  <span style="font:400 11.5px 'IBM Plex Mono',monospace;color:var(--ink3)">{{ advSummary }}</span>
+                </span>
+                <span style="font-size:12px;color:var(--ink3)">{{ advIcon }}</span>
+              </button>
+              <sc-if value="{{ advOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="padding:4px 18px 20px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:18px">
+                  <div style="padding-top:16px">
+                    <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:9px">
+                      <span style="font-size:13px;font-weight:500">Chunk size</span>
+                      <span style="font:400 12px 'IBM Plex Mono',monospace;color:var(--ink2)">{{ chunkLabel }}</span>
+                    </div>
+                    <div style="display:flex;gap:7px">
+                      <sc-for list="{{ chunkOpts }}" as="c" hint-placeholder-count="4">
+                        <button onClick="{{ c.go }}" style="{{ c.style }}">{{ c.label }}</button>
+                      </sc-for>
+                    </div>
+                    <div style="font-size:12px;color:var(--ink3);line-height:1.5;margin-top:8px">Shorter chunks find sharper topic boundaries; longer chunks give the sentiment model more context. 30 s is the default used in the methods text.</div>
+                  </div>
+                  <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px">
+                    <sc-for list="{{ modelPickers }}" as="m" hint-placeholder-count="2">
+                      <div>
+                        <div style="font-size:13px;font-weight:500;margin-bottom:8px">{{ m.name }}</div>
+                        <div style="display:flex;flex-direction:column;gap:6px">
+                          <sc-for list="{{ m.opts }}" as="o" hint-placeholder-count="3">
+                            <button onClick="{{ o.go }}" style="{{ o.style }}">
+                              <span style="display:block;font-family:'IBM Plex Mono',monospace;font-size:12px">{{ o.id }}</span>
+                              <span style="display:block;font-size:11.5px;color:var(--ink3);margin-top:2px;line-height:1.4">{{ o.note }}</span>
+                            </button>
+                          </sc-for>
+                        </div>
+                      </div>
+                    </sc-for>
+                  </div>
+                  <div style="display:flex;gap:14px;align-items:flex-start;padding:14px;background:var(--sunk);border-radius:3px">
+                    <button onClick="{{ toggleWhisper }}" style="{{ whisperSwitch }}"><span style="{{ whisperKnob }}"></span></button>
+                    <div>
+                      <div style="font-size:13px;font-weight:500;margin-bottom:4px">Whisper audio fallback</div>
+                      <div style="font-size:12.5px;line-height:1.55;color:var(--ink2);max-width:52ch">When a video has no caption track, transcribe the audio locally. This recovers most skips — and it is <strong style="color:var(--warn)">much slower</strong>: roughly 6–10× the run time on this machine, hours for a large batch.</div>
+                    </div>
+                  </div>
+                </div>
+              </sc-if>
+            </div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:16px;position:sticky;top:76px">
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:20px">
+              <div style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:var(--ink3);margin-bottom:14px">RUN SUMMARY</div>
+              <div style="display:flex;flex-direction:column;gap:9px;margin-bottom:18px">
+                <sc-for list="{{ runSummary }}" as="s" hint-placeholder-count="5">
+                  <div style="display:flex;justify-content:space-between;gap:12px;font-size:12.5px">
+                    <span style="color:var(--ink3)">{{ s.k }}</span><span style="font-family:'IBM Plex Mono',monospace;text-align:right">{{ s.v }}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <button onClick="{{ startRun }}" style="width:100%;background:var(--ink);color:var(--paper);border:none;border-radius:3px;padding:14px;font:600 14px 'IBM Plex Sans',sans-serif;cursor:pointer" style-hover="opacity:.88">Run analysis</button>
+              <div style="font-size:11.5px;color:var(--ink3);line-height:1.5;margin-top:10px;text-align:center">Nothing leaves this machine except the transcript fetch.</div>
+            </div>
+            <div style="border:1px dashed var(--line2);border-radius:4px;padding:18px 20px">
+              <div style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:var(--ink3);margin-bottom:8px">EMPTY STATE · NOTHING RUN YET</div>
+              <div style="font-family:'Source Serif 4',Georgia,serif;font-size:16px;line-height:1.45;margin-bottom:8px">The results views stay visible but inert until a run finishes.</div>
+              <div style="font-size:12.5px;line-height:1.55;color:var(--ink2)">Researchers should be able to see the shape of the output before committing an hour of GPU time — so Topics, Sentiment and Export are reachable and explain what they will contain.</div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ═══ PROGRESS ═══ -->
+      <sc-if value="{{ isProg }}" hint-placeholder-val="{{ false }}">
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:24px;align-items:start;max-width:1240px">
+          <div style="display:flex;flex-direction:column;gap:20px">
+            <div>
+              <div style="font:500 11px/1 'IBM Plex Mono',monospace;letter-spacing:.14em;color:var(--ink3)">RUN IN PROGRESS · STARTED 14:02:08</div>
+              <h1 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:34px;line-height:1.1;letter-spacing:-.02em;margin:12px 0 8px">Reading 14 videos</h1>
+              <p style="margin:0;max-width:62ch;font-size:15px;line-height:1.6;color:var(--ink2)">The topic model is fitted once, over the whole batch, after every transcript is in — so topic IDs mean the same thing in every video.</p>
+            </div>
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:22px 24px">
+              <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:18px">
+                <h2 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:18px;margin:0">Pipeline</h2>
+                <span style="font:400 11.5px 'IBM Plex Mono',monospace;color:var(--ink3)">elapsed 4m 12s · est. 3m 30s left</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:16px">{{ stageList }}</div>
+              <div style="margin-top:20px;padding:13px 15px;background:var(--sunk);border-left:2px solid var(--warn);font-size:12.5px;line-height:1.55;color:var(--ink2)">
+                <strong style="color:var(--ink)">First run on this machine.</strong> Downloading <span style="font-family:'IBM Plex Mono',monospace">all-MiniLM-L6-v2</span> (91 MB) and <span style="font-family:'IBM Plex Mono',monospace">twitter-roberta-sentiment</span> (501 MB). One-time — subsequent runs start at the fetch stage.
+                <div style="margin-top:9px;height:5px;background:var(--line);border-radius:3px;overflow:hidden"><div style="height:100%;width:74%;background:var(--warn)"></div></div>
+              </div>
+            </div>
+          </div>
+          <div style="background:var(--surface);border:1px solid var(--line);border-radius:4px;position:sticky;top:76px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--line)">
+              <h2 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:17px;margin:0">Per-URL status</h2>
+              <span style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3)">11 ok · 2 skipped · 1 queued</span>
+            </div>
+            <div style="max-height:520px;overflow:auto">
+              <sc-for list="{{ urlStatus }}" as="u" hint-placeholder-count="8">
+                <div style="display:grid;grid-template-columns:16px minmax(0,1fr);gap:11px;align-items:start;padding:11px 18px;border-bottom:1px solid var(--line)">
+                  <span style="{{ u.dotStyle }}"></span>
+                  <span style="min-width:0">
+                    <span style="display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ u.title }}</span>
+                    <span style="display:block;font:400 11px 'IBM Plex Mono',monospace;color:{{ u.color }};margin-top:3px">{{ u.state }}</span>
+                  </span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ═══ BATCH OVERVIEW ═══ -->
+      <sc-if value="{{ isBatch }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:26px;max-width:1220px">
+          <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap">
+            <div>
+              <div style="font:500 11px/1 'IBM Plex Mono',monospace;letter-spacing:.14em;color:var(--ink3)">RUN 14:02 · 10 SEP 2026 · SESSION ONLY</div>
+              <h1 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:38px;line-height:1.08;letter-spacing:-.02em;margin:12px 0 8px">Batch overview</h1>
+              <p style="margin:0;max-width:62ch;font-size:15px;line-height:1.6;color:var(--ink2)">30 s chunks · MiniLM-L6 embeddings · roberta sentiment · Whisper fallback off. These settings are stamped on every export.</p>
+            </div>
+            <button onClick="{{ goExport }}" style="background:var(--ink);color:var(--paper);border:none;border-radius:3px;padding:11px 18px;font:600 13px 'IBM Plex Sans',sans-serif;cursor:pointer" style-hover="opacity:.88">Export this run</button>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:4px;overflow:hidden">
+            <sc-for list="{{ batchStats }}" as="s" hint-placeholder-count="5">
+              <div style="background:var(--surface);padding:18px 20px">
+                <div style="font:500 10px/1 'IBM Plex Mono',monospace;letter-spacing:.12em;color:var(--ink3)">{{ s.label }}</div>
+                <div style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:30px;line-height:1;letter-spacing:-.02em;margin:13px 0 6px">{{ s.v }}</div>
+                <div style="font-size:12px;line-height:1.45;color:var(--ink2)">{{ s.sub }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:20px;align-items:start">
+            <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:22px 24px">
+              <div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px">
+                <h2 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:19px;margin:0">Batch sentiment</h2>
+                <span style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3)">n = {{ batchChunks }} chunks · −1 … +1</span>
+              </div>
+              <div style="margin:18px 0 6px">{{ batchHist }}</div>
+              <div style="display:flex;gap:22px;flex-wrap:wrap;padding-top:14px;border-top:1px solid var(--line);margin-top:14px">
+                <sc-for list="{{ batchSentStats }}" as="s" hint-placeholder-count="3">
+                  <div>
+                    <div style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3)">{{ s.k }}</div>
+                    <div style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:20px;margin-top:4px;color:{{ s.color }}">{{ s.v }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+
+            <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:22px 24px">
+              <h2 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:19px;margin:0 0 4px">3 videos skipped</h2>
+              <p style="margin:0 0 16px;font-size:13px;line-height:1.55;color:var(--ink2)">The batch ran anyway. Skipped videos are excluded from every statistic and named here so the denominator is never a mystery.</p>
+              <div style="display:flex;flex-direction:column;gap:10px">
+                <sc-for list="{{ skips }}" as="s" hint-placeholder-count="3">
+                  <div style="border:1px solid var(--line);border-left:3px solid {{ s.color }};border-radius:3px;padding:12px 14px">
+                    <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.title }}</div>
+                    <div style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3);margin:4px 0 6px">{{ s.url }}</div>
+                    <div style="font-size:12.5px;line-height:1.5;color:var(--ink2)">{{ s.why }}</div>
+                    <button style="margin-top:10px;background:none;border:1px solid var(--line2);border-radius:3px;padding:6px 10px;font:500 11.5px 'IBM Plex Sans',sans-serif;cursor:pointer" style-hover="background:var(--sunk)">{{ s.cta }}</button>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+          </div>
+
+          <section>
+            <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px">
+              <h2 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:19px;margin:0">Videos in this run</h2>
+              <span style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3)">micro-throughline: topic lane + sentiment ribbon over full runtime</span>
+            </div>
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:4px;overflow:hidden">
+              <div style="display:grid;grid-template-columns:minmax(0,2.2fr) 200px 92px 118px 96px;gap:16px;padding:11px 20px;border-bottom:1px solid var(--line);background:var(--sunk);font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.1em;color:var(--ink3)">
+                <div>VIDEO</div><div>THROUGHLINE</div><div style="text-align:right">RUNTIME</div><div style="text-align:right">MEAN VALENCE</div><div style="text-align:right">TOPICS</div>
+              </div>
+              <sc-for list="{{ batchVideos }}" as="v" hint-placeholder-count="8">
+                <div onClick="{{ v.go }}" style="display:grid;grid-template-columns:minmax(0,2.2fr) 200px 92px 118px 96px;gap:16px;align-items:center;padding:13px 20px;border-bottom:1px solid var(--line);cursor:pointer" style-hover="background:var(--sunk)">
+                  <div style="min-width:0">
+                    <div style="font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ v.title }}</div>
+                    <div style="font-size:12px;color:var(--ink3);margin-top:2px">{{ v.channel }} · {{ v.topline }}</div>
+                  </div>
+                  <div>{{ v.micro }}</div>
+                  <div style="text-align:right;font:400 12.5px 'IBM Plex Mono',monospace;color:var(--ink2)">{{ v.durLabel }}</div>
+                  <div style="text-align:right">{{ v.valChip }}</div>
+                  <div style="text-align:right;font:400 12.5px 'IBM Plex Mono',monospace;color:var(--ink2)">{{ v.nTopics }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </section>
+        </div>
+      </sc-if>
+
+      <!-- ═══ TOPICS ═══ -->
+      <sc-if value="{{ isTopics }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:24px;max-width:1240px">
+          <div>
+            <h1 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:34px;line-height:1.1;letter-spacing:-.02em;margin:0 0 8px">Topics in this batch</h1>
+            <p style="margin:0;max-width:64ch;font-size:15px;line-height:1.6;color:var(--ink2)">One model fitted across all 11 transcripts. Labels are generated from each topic's top c-TF-IDF terms and are editable — the keyword chips are the ground truth.</p>
+          </div>
+
+          <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:20px 22px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:14px">
+              <h2 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:17px;margin:0">Topic share of all chunks</h2>
+              <span style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3)">n = {{ batchChunks }} chunks · outlier bin shown, not hidden</span>
+            </div>
+            {{ shareBar }}
+            <div style="display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:14px">
+              <sc-for list="{{ shareLegend }}" as="l" hint-placeholder-count="6">
+                <span style="display:flex;align-items:center;gap:7px;font-size:12px;color:var(--ink2)">{{ l.swatch }}<span>{{ l.label }}</span><span style="font-family:'IBM Plex Mono',monospace;color:var(--ink3)">{{ l.pct }}</span></span>
+              </sc-for>
+            </div>
+          </section>
+
+          <div style="display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:14px">
+            <sc-for list="{{ topicCards }}" as="t" hint-placeholder-count="12">
+              <button onClick="{{ t.go }}" style="{{ t.cardStyle }}" style-hover="border-color:var(--line2)">
+                <div style="display:flex;align-items:flex-start;gap:10px">
+                  <span style="flex:none;margin-top:2px">{{ t.swatch }}</span>
+                  <span style="display:flex;flex-direction:column;gap:3px;text-align:left">
+                    <span style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:{{ t.titleSize }};line-height:1.15;letter-spacing:-.01em">{{ t.label }}</span>
+                    <span style="font:400 10.5px 'IBM Plex Mono',monospace;color:var(--ink3)">{{ t.id }} · {{ t.vids }} videos</span>
+                  </span>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:5px">
+                  <sc-for list="{{ t.kw }}" as="k" hint-placeholder-count="4">
+                    <span style="font:400 10.5px/1 'IBM Plex Mono',monospace;color:var(--ink2);background:var(--sunk);border-radius:2px;padding:4px 6px">{{ k }}</span>
+                  </sc-for>
+                </div>
+                <div style="margin-top:auto;display:flex;flex-direction:column;gap:9px">
+                  <div>
+                    <div style="display:flex;justify-content:space-between;font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3);margin-bottom:4px"><span>share of content</span><span style="color:var(--ink);font-weight:500">{{ t.metricVal }}</span></div>
+                    <div style="height:4px;background:var(--sunk);border-radius:2px;overflow:hidden"><div style="height:100%;width:{{ t.barW }};background:{{ t.color }}"></div></div>
+                  </div>
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:9px;border-top:1px solid var(--line)">
+                    <span style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3)">valence {{ t.valNum }}</span>
+                    {{ t.valMini }}
+                  </div>
+                  <div style="display:flex;align-items:center;gap:7px;font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3)">
+                    <span style="{{ t.ctrlStyle }}">{{ t.ctrl }}</span><span>σ {{ t.spread }}</span>
+                  </div>
+                </div>
+              </button>
+            </sc-for>
+            <div style="grid-column:span 4;min-height:196px;display:flex;flex-direction:column;gap:12px;background:var(--surface);border:1px dashed var(--line2);border-radius:4px;padding:18px">
+              <div style="display:flex;align-items:flex-start;gap:10px">
+                <span style="width:18px;height:18px;flex:none;margin-top:2px;border-radius:2px;background:repeating-linear-gradient(45deg,var(--line2) 0 3px,transparent 3px 6px)"></span>
+                <span style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:16px;line-height:1.15;text-align:left">Outlier bin (topic −1)</span>
+              </div>
+              <div style="font-size:12.5px;line-height:1.55;color:var(--ink2);text-align:left">Chunks the model refused to cluster: intros, ad reads, crosstalk, one-off asides. They stay in the denominator of every share on this page.</div>
+              <div style="margin-top:auto">
+                <div style="display:flex;justify-content:space-between;font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3);margin-bottom:4px"><span>share of content</span><span style="color:var(--ink);font-weight:500">{{ outlierPct }}</span></div>
+                <div style="height:4px;background:var(--sunk);border-radius:2px;overflow:hidden"><div style="height:100%;width:{{ outlierPct }};background:repeating-linear-gradient(45deg,var(--line2) 0 3px,transparent 3px 6px)"></div></div>
+                <button style="margin-top:12px;background:none;border:1px solid var(--line2);border-radius:3px;padding:7px 11px;font:500 12px 'IBM Plex Sans',sans-serif;cursor:pointer" style-hover="background:var(--sunk)">Inspect 214 chunks</button>
+              </div>
+            </div>
+          </div>
+
+          <section>
+            <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px">
+              <h2 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:19px;margin:0">Representative excerpts · {{ topicLabel }}</h2>
+              <span style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3)">play → video page, player cued to the timestamp</span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px">
+              <sc-for list="{{ quotes }}" as="q" hint-placeholder-count="6">
+                <div style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:18px 20px 16px;display:flex;flex-direction:column;gap:12px">
+                  <div style="display:flex;align-items:center;gap:8px">{{ q.sentChip }}<span style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3)">{{ q.sentLabel }}</span></div>
+                  <p style="margin:0;font-family:'Source Serif 4',Georgia,serif;font-size:16px;line-height:1.5;text-wrap:pretty">“{{ q.text }}”</p>
+                  <div style="margin-top:auto;padding-top:12px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px">
+                    <div style="min-width:0">
+                      <div style="font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ q.title }}</div>
+                      <div style="font:400 11.5px 'IBM Plex Mono',monospace;color:var(--ink3)">{{ q.stamp }} · {{ q.channel }}</div>
+                    </div>
+                    <button onClick="{{ q.go }}" style="flex:none;display:flex;align-items:center;gap:7px;background:var(--ink);color:var(--paper);border:none;border-radius:3px;padding:7px 11px;font:500 12px 'IBM Plex Sans',sans-serif;cursor:pointer" style-hover="opacity:.85">
+                      <span style="font-size:9px">▶</span><span>Play</span>
+                    </button>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </section>
+        </div>
+      </sc-if>
+
+      <!-- ═══ TOPIC SENTIMENT ═══ -->
+      <sc-if value="{{ isSent }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:24px;max-width:1240px">
+          <div>
+            <h1 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:34px;line-height:1.1;letter-spacing:-.02em;margin:0 0 8px">Topic sentiment</h1>
+            <p style="margin:0;max-width:64ch;font-size:15px;line-height:1.6;color:var(--ink2)">How each topic is talked about, and how much the batch disagrees about it. Chart and table are the same numbers in the same order — sorting one sorts both.</p>
+          </div>
+
+          <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:22px 24px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:6px">
+              <h2 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:18px;margin:0">Mean valence by topic, with controversy range</h2>
+              <span style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3)">dot = mean · bar = ±1 SD · n per topic in table</span>
+            </div>
+            {{ divergingChart }}
+          </section>
+
+          <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px;overflow:hidden">
+            <div style="display:flex;align-items:center;gap:14px;padding:14px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap">
+              <h2 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:18px;margin:0;flex:1">Detail table</h2>
+              <span style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3)">SORT</span>
+              <sc-for list="{{ sortOpts }}" as="s" hint-placeholder-count="3">
+                <button onClick="{{ s.go }}" style="{{ s.style }}">{{ s.label }}</button>
+              </sc-for>
+            </div>
+            <div style="overflow:auto">
+              <div style="display:grid;grid-template-columns:minmax(200px,1.6fr) 96px 92px 92px 82px 110px;gap:14px;padding:10px 20px;background:var(--sunk);border-bottom:1px solid var(--line);font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.1em;color:var(--ink3)">
+                <div>TOPIC</div><div style="text-align:right">CHUNKS</div><div style="text-align:right">SHARE</div><div style="text-align:right">MEAN</div><div style="text-align:right">SD</div><div style="text-align:right">CONTROVERSY</div>
+              </div>
+              <sc-for list="{{ sentTable }}" as="r" hint-placeholder-count="12">
+                <div onClick="{{ r.go }}" style="display:grid;grid-template-columns:minmax(200px,1.6fr) 96px 92px 92px 82px 110px;gap:14px;align-items:center;padding:11px 20px;border-bottom:1px solid var(--line);cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--ink2)" style-hover="background:var(--sunk)">
+                  <div style="display:flex;align-items:center;gap:9px;min-width:0"><span style="flex:none">{{ r.swatch }}</span><span style="font-family:'IBM Plex Sans',sans-serif;font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ r.label }}</span></div>
+                  <div style="text-align:right">{{ r.n }}</div>
+                  <div style="text-align:right">{{ r.share }}</div>
+                  <div style="text-align:right;color:{{ r.meanColor }};font-weight:500">{{ r.mean }}</div>
+                  <div style="text-align:right">{{ r.sd }}</div>
+                  <div style="display:flex;justify-content:flex-end">{{ r.ctrlBar }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </section>
+
+          <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:22px 24px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:4px">
+              <h2 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:18px;margin:0">Video × topic heatmap</h2>
+              <span style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3)">cell = share of that video's chunks · comparable because the topic space is shared</span>
+            </div>
+            <p style="margin:6px 0 18px;font-size:13px;line-height:1.55;color:var(--ink2);max-width:70ch">Rows are videos, columns are topics. A dense column is a topic the whole batch keeps returning to; a lone dark cell is a video that owns a subject by itself.</p>
+            {{ heatmap }}
+          </section>
+        </div>
+      </sc-if>
+
+      <!-- ═══ VIDEO PAGE ═══ -->
+      <sc-if value="{{ isVideo }}" hint-placeholder-val="{{ false }}">
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) 336px;gap:24px;align-items:start;max-width:1340px">
+          <div style="display:flex;flex-direction:column;gap:20px;min-width:0">
+            <div>
+              <div style="display:flex;align-items:center;gap:10px;font:500 11px/1 'IBM Plex Mono',monospace;letter-spacing:.12em;color:var(--ink3)">
+                <span>{{ videoId }}</span><span style="color:var(--line2)">·</span><span>{{ videoChannel }}</span>
+                <sc-if value="{{ singleRun }}" hint-placeholder-val="{{ false }}">
+                  <span style="letter-spacing:0;text-transform:none;border:1px solid var(--line);border-radius:2px;padding:3px 6px;color:var(--ink2)">single-video run · batch views hidden</span>
+                </sc-if>
+              </div>
+              <h1 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:29px;line-height:1.15;letter-spacing:-.02em;margin:10px 0 0;text-wrap:pretty">{{ videoTitle }}</h1>
+            </div>
+
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:4px;overflow:hidden">
+              <div style="position:relative;background:#0E0F0D">{{ player }}</div>
+              <div style="display:flex;align-items:center;gap:14px;padding:12px 16px;border-bottom:1px solid var(--line)">
+                <button onClick="{{ togglePlay }}" style="width:34px;height:34px;flex:none;border-radius:50%;background:var(--ink);color:var(--paper);border:none;cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center" style-hover="opacity:.85">{{ playIcon }}</button>
+                <span style="font:400 12.5px 'IBM Plex Mono',monospace;color:var(--ink2)">{{ clock }}</span>
+                <div style="flex:1"></div>
+                <span style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3)">hover for the excerpt · click anywhere to seek</span>
+              </div>
+              <div style="padding:18px 16px 8px">{{ throughlineFull }}</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px 14px;padding:6px 16px 16px">
+                <sc-for list="{{ videoLegend }}" as="l" hint-placeholder-count="3">
+                  <button onClick="{{ l.go }}" style="{{ l.style }}">
+                    <span style="flex:none">{{ l.swatch }}</span><span>{{ l.label }}</span><span style="color:var(--ink3);font-family:'IBM Plex Mono',monospace">{{ l.share }}</span>
+                  </button>
+                </sc-for>
+              </div>
+            </div>
+
+            <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px">
+              <div style="display:flex;align-items:baseline;justify-content:space-between;padding:18px 22px 12px;border-bottom:1px solid var(--line)">
+                <h2 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:18px;margin:0">Transcript</h2>
+                <span style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3)">30 s chunks · left rule = topic · follows the playhead</span>
+              </div>
+              <div style="max-height:430px;overflow:auto">
+                <sc-for list="{{ transcript }}" as="c" hint-placeholder-count="8">
+                  <div onClick="{{ c.go }}" style="{{ c.style }}" style-hover="background:var(--sunk)">
+                    <span style="font:400 11.5px/1.6 'IBM Plex Mono',monospace;color:var(--ink3)">{{ c.stamp }}</span>
+                    <span style="font-size:14px;line-height:1.6;color:var(--ink2)">{{ c.text }}</span>
+                    <span style="display:flex;align-items:center;gap:6px;justify-content:flex-end">{{ c.sentChip }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:16px;position:sticky;top:76px">
+            <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:18px 20px">
+              <div style="font:500 10px/1 'IBM Plex Mono',monospace;letter-spacing:.12em;color:var(--ink3);margin-bottom:12px">METADATA</div>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <sc-for list="{{ videoMeta }}" as="m" hint-placeholder-count="6">
+                  <div style="display:flex;justify-content:space-between;gap:12px;font-size:12.5px">
+                    <span style="color:var(--ink3)">{{ m.k }}</span><span style="font-family:'IBM Plex Mono',monospace;text-align:right">{{ m.v }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+
+            <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:18px 20px">
+              <div style="font:500 10px/1 'IBM Plex Mono',monospace;letter-spacing:.12em;color:var(--ink3);margin-bottom:12px">TOPIC MIX · SHARE OF RUNTIME</div>
+              {{ videoMixBar }}
+              <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
+                <sc-for list="{{ videoMix }}" as="m" hint-placeholder-count="3">
+                  <div style="display:grid;grid-template-columns:14px minmax(0,1fr) 46px;gap:9px;align-items:center">
+                    <span>{{ m.swatch }}</span>
+                    <button onClick="{{ m.go }}" style="text-align:left;background:none;border:none;padding:0;font-size:12.5px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" style-hover="text-decoration:underline">{{ m.label }}</button>
+                    <span style="text-align:right;font:400 12px 'IBM Plex Mono',monospace;color:var(--ink2)">{{ m.share }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+
+            <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:18px 20px">
+              <div style="font:500 10px/1 'IBM Plex Mono',monospace;letter-spacing:.12em;color:var(--ink3);margin-bottom:6px">SENTIMENT BY TOPIC · THIS VIDEO</div>
+              <div style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3);margin-bottom:14px">mean ± SD, −1 … +1</div>
+              {{ videoSentBars }}
+            </section>
+
+            <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:18px 20px">
+              <div style="font:500 10px/1 'IBM Plex Mono',monospace;letter-spacing:.12em;color:var(--ink3);margin-bottom:4px">PEOPLE &amp; ENTITIES MENTIONED</div>
+              <div style="font-size:12px;color:var(--ink3);line-height:1.5;margin-bottom:12px">Extracted from the transcript · count = mentions</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px">
+                <sc-for list="{{ entities }}" as="e" hint-placeholder-count="8">
+                  <span style="display:flex;align-items:center;gap:6px;font-size:12px;background:var(--sunk);border:1px solid var(--line);border-radius:2px;padding:5px 8px">
+                    <span>{{ e.name }}</span><span style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3)">{{ e.n }}</span>
+                  </span>
+                </sc-for>
+              </div>
+            </section>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ═══ EXPORT ═══ -->
+      <sc-if value="{{ isExport }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:24px;max-width:1240px">
+          <div>
+            <h1 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:34px;line-height:1.1;letter-spacing:-.02em;margin:0 0 8px">Export</h1>
+            <p style="margin:0;max-width:64ch;font-size:15px;line-height:1.6;color:var(--ink2)">CSV, UTF-8, one header row. Every file carries the run settings in its filename so a figure can be traced back to the exact model versions.</p>
+          </div>
+          <div style="display:grid;grid-template-columns:300px minmax(0,1fr);gap:20px;align-items:start">
+            <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:20px 22px">
+              <div style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:var(--ink3);margin-bottom:12px">FILE</div>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <sc-for list="{{ exportFiles }}" as="f" hint-placeholder-count="3">
+                  <button onClick="{{ f.go }}" style="{{ f.style }}">
+                    <span style="display:block;font-family:'IBM Plex Mono',monospace;font-size:12px">{{ f.file }}</span>
+                    <span style="display:block;font-size:11.5px;color:var(--ink3);margin-top:3px;line-height:1.45">{{ f.desc }}</span>
+                  </button>
+                </sc-for>
+              </div>
+              <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px">
+                <sc-for list="{{ exportMeta }}" as="m" hint-placeholder-count="4">
+                  <div style="display:flex;justify-content:space-between;gap:10px;font-size:12.5px">
+                    <span style="color:var(--ink3)">{{ m.k }}</span><span style="font-family:'IBM Plex Mono',monospace;text-align:right">{{ m.v }}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <button style="margin-top:18px;width:100%;background:var(--ink);color:var(--paper);border:none;border-radius:3px;padding:12px;font:600 13px 'IBM Plex Sans',sans-serif;cursor:pointer" style-hover="opacity:.88">Download {{ exportName }}</button>
+              <button style="margin-top:8px;width:100%;background:none;border:1px solid var(--line2);border-radius:3px;padding:10px;font:500 12.5px 'IBM Plex Sans',sans-serif;cursor:pointer" style-hover="background:var(--sunk)">Download all three as .zip</button>
+            </section>
+
+            <div style="display:flex;flex-direction:column;gap:16px;min-width:0">
+              <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px;overflow:hidden">
+                <div style="display:flex;align-items:baseline;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line)">
+                  <h2 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:18px;margin:0">Schema</h2>
+                  <span style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3)">{{ schemaDims }}</span>
+                </div>
+                <div style="display:grid;grid-template-columns:minmax(180px,1fr) 90px minmax(240px,2fr);gap:14px;padding:10px 20px;background:var(--sunk);border-bottom:1px solid var(--line);font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.1em;color:var(--ink3)">
+                  <div>COLUMN</div><div>TYPE</div><div>MEANING</div>
+                </div>
+                <sc-for list="{{ schema }}" as="s" hint-placeholder-count="8">
+                  <div style="display:grid;grid-template-columns:minmax(180px,1fr) 90px minmax(240px,2fr);gap:14px;padding:9px 20px;border-bottom:1px solid var(--line);font-size:12.5px">
+                    <div style="font-family:'IBM Plex Mono',monospace">{{ s.col }}</div>
+                    <div style="font-family:'IBM Plex Mono',monospace;color:var(--ink3)">{{ s.type }}</div>
+                    <div style="color:var(--ink2);line-height:1.45">{{ s.desc }}</div>
+                  </div>
+                </sc-for>
+              </section>
+              <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px;overflow:hidden">
+                <div style="display:flex;align-items:baseline;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line)">
+                  <h2 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:18px;margin:0">First rows</h2>
+                  <span style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3)">exactly what lands in the file</span>
+                </div>
+                <div style="overflow:auto">{{ previewTable }}</div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ═══ FOUNDATIONS ═══ -->
+      <sc-if value="{{ isFound }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:34px;max-width:1240px">
+          <div>
+            <h1 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:34px;line-height:1.1;letter-spacing:-.02em;margin:0 0 8px">Pattern &amp; colour foundations</h1>
+            <p style="margin:0;max-width:64ch;font-size:15px;line-height:1.6;color:var(--ink2)">Two colour systems that never mix: topic identity is categorical, sentiment is diverging. Every topic colour carries a fill pattern and a text label, so hue is never the only encoding.</p>
+          </div>
+
+          <section>
+            <h2 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:20px;margin:0 0 4px">The throughline, three sizes</h2>
+            <p style="margin:0 0 16px;font-size:13.5px;color:var(--ink2);max-width:72ch">Topic lane on top (contiguous chunks, chapter-like), sentiment ribbon beneath (above centerline positive, below negative, height = |score|).</p>
+            <div style="display:flex;flex-direction:column;gap:16px">
+              <div style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:20px 22px">
+                <div style="display:flex;justify-content:space-between;font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3);margin-bottom:12px"><span>FULL · video page hero · 163px</span><span>hover → tooltip · click → seek · playhead mirrored live</span></div>
+                {{ demoFull }}
+              </div>
+              <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px">
+                <div style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:20px 22px">
+                  <div style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3);margin-bottom:12px">MEDIUM · cards · 64px</div>
+                  {{ demoMed }}
+                </div>
+                <div style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:20px 22px">
+                  <div style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3);margin-bottom:12px">MICRO · every video list · 26px</div>
+                  <div style="display:flex;flex-direction:column;gap:10px">{{ demoMicros }}</div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:20px;align-items:start">
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:20px 22px">
+              <h2 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:18px;margin:0 0 2px">Topic palette · categorical</h2>
+              <div style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3);margin-bottom:16px">12 hues, Tol-derived, deuteranopia-checked · fill pattern repeats every 4</div>
+              <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px">
+                <sc-for list="{{ paletteTopics }}" as="p" hint-placeholder-count="12">
+                  <div style="display:flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid var(--line);border-radius:3px">
+                    <span style="flex:none">{{ p.swatch }}</span>
+                    <span style="min-width:0">
+                      <span style="display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.label }}</span>
+                      <span style="display:block;font:400 10.5px 'IBM Plex Mono',monospace;color:var(--ink3)">{{ p.hex }}</span>
+                    </span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:20px 22px">
+              <h2 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:18px;margin:0 0 2px">Sentiment scale · diverging</h2>
+              <div style="font:400 11px 'IBM Plex Mono',monospace;color:var(--ink3);margin-bottom:16px">never used for topics · never red/green alone</div>
+              {{ sentScale }}
+              <div style="display:flex;flex-direction:column;gap:9px;margin-top:16px">
+                <sc-for list="{{ sentStops }}" as="s" hint-placeholder-count="5">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <span style="width:26px;height:14px;border-radius:2px;flex:none;background:{{ s.color }}"></span>
+                    <span style="font:400 11.5px 'IBM Plex Mono',monospace;color:var(--ink2);width:52px">{{ s.val }}</span>
+                    <span style="font-size:12.5px;color:var(--ink2)">{{ s.label }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h2 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:20px;margin:0 0 14px">Two core flows</h2>
+            <div style="display:flex;flex-direction:column;gap:14px">
+              <sc-for list="{{ flows }}" as="f" hint-placeholder-count="2">
+                <div style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:20px 22px">
+                  <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:6px">
+                    <span style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:var(--ink3)">{{ f.kicker }}</span>
+                    <span style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:17px">{{ f.title }}</span>
+                  </div>
+                  <div style="font-size:12.5px;color:var(--ink2);line-height:1.5;margin-bottom:16px;max-width:76ch">{{ f.note }}</div>
+                  <div style="display:flex;align-items:stretch;flex-wrap:wrap">
+                    <sc-for list="{{ f.steps }}" as="s" hint-placeholder-count="5">
+                      <div style="display:flex;align-items:stretch">
+                        <button onClick="{{ s.go }}" style="width:184px;text-align:left;background:var(--sunk);border:1px solid var(--line);border-radius:3px;padding:12px 14px;cursor:pointer;display:flex;flex-direction:column;gap:6px" style-hover="border-color:var(--line2)">
+                          <span style="font:500 10px 'IBM Plex Mono',monospace;color:var(--ink3)">{{ s.n }}</span>
+                          <span style="font-size:13px;font-weight:600;line-height:1.25">{{ s.title }}</span>
+                          <span style="font-size:11.5px;line-height:1.45;color:var(--ink2)">{{ s.note }}</span>
+                        </button>
+                        <span style="display:flex;align-items:center;padding:0 8px;color:var(--line2);font-size:14px">{{ s.arrow }}</span>
+                      </div>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </section>
+
+          <section>
+            <h2 style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:20px;margin:0 0 14px">Empty, loading and partial-failure states</h2>
+            <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px">
+              <sc-for list="{{ states }}" as="s" hint-placeholder-count="3">
+                <div style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:20px 22px;display:flex;flex-direction:column;gap:10px;min-height:214px">
+                  <div style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:{{ s.color }}">{{ s.kicker }}</div>
+                  <div style="font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:17px;line-height:1.25">{{ s.title }}</div>
+                  <div style="font-size:12.5px;line-height:1.55;color:var(--ink2)">{{ s.body }}</div>
+                  <div style="margin-top:auto">{{ s.visual }}</div>
+                  <button style="align-self:flex-start;background:none;border:1px solid var(--line2);border-radius:3px;padding:7px 11px;font:500 12px 'IBM Plex Sans',sans-serif;cursor:pointer" style-hover="background:var(--sunk)">{{ s.cta }}</button>
+                </div>
+              </sc-for>
+            </div>
+          </section>
+        </div>
+      </sc-if>
+
+    </div>
+  </main>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:980}}">
+class Component extends DCLogic {
+  TOPICS = [
+    {id:'T00',label:'Election & Campaigns',color:'#332288',kw:['ballot','turnout','primary','swing state','debate']},
+    {id:'T01',label:'Immigration & Border',color:'#4477AA',kw:['border','asylum','visa','crossing','enforcement']},
+    {id:'T02',label:'Economy & Inflation',color:'#88CCEE',kw:['inflation','grocery','wages','rate hike','tariff']},
+    {id:'T03',label:'Public Health',color:'#117733',kw:['booster','clinic','trial','dosage','immunity']},
+    {id:'T04',label:'Climate & Energy',color:'#999933',kw:['grid','heat dome','solar','emissions','blackout']},
+    {id:'T05',label:'Guns & Policing',color:'#DDCC77',kw:['carry permit','patrol','sentencing','precinct']},
+    {id:'T06',label:'Sports Commentary',color:'#CC6677',kw:['week 3','depth chart','overtime','draft']},
+    {id:'T07',label:'Crime Narration',color:'#882255',kw:['case file','testimony','witness','evidence']},
+    {id:'T08',label:'Personal Finance',color:'#AA4499',kw:['index fund','credit','portfolio','payoff']},
+    {id:'T09',label:'Gaming & Streamers',color:'#EE8866',kw:['ranked','patch notes','build','season reset']},
+    {id:'T10',label:'Cooking & Home',color:'#8A5A2B',kw:['one pan','weeknight','pantry','prep']},
+    {id:'T11',label:'Faith & Community',color:'#6E6E6E',kw:['sermon','scripture','congregation','patience']}
+  ];
+  VIDEOS = [
+    {id:'v01',t:'The Debate, Line by Line: What Both Sides Got Wrong',ch:'Front Porch Politics',dur:2280,mix:[0,2,5],bias:-0.30,pub:'2026-08-04',url:'youtu.be/pQ7x2kL'},
+    {id:'v02',t:'Border County Ride-Along: 48 Hours',ch:'Meridian Reports',dur:1980,mix:[1,5,0],bias:-0.22,pub:'2026-07-29',url:'youtu.be/9mXqvB0'},
+    {id:'v03',t:"Why Your Grocery Bill Isn't Coming Down",ch:'The Weekly Ledger',dur:1140,mix:[2,8],bias:-0.18,pub:'2026-08-11',url:'youtu.be/tR4nwZ9'},
+    {id:'v04',t:'Doctor Reacts: The New Booster Guidance',ch:'Clinic Notes',dur:960,mix:[3,2],bias:0.24,pub:'2026-08-16',url:'youtu.be/bH1knQ6'},
+    {id:'v05',t:'Blackout Season: Inside the Grid',ch:'Longform Field',dur:2640,mix:[4,2,0],bias:-0.06,pub:'2026-07-18',url:'youtu.be/kW8pLm3'},
+    {id:'v06',t:'Concealed Carry Reform, Explained',ch:'Front Porch Politics',dur:1320,mix:[5,0],bias:-0.12,pub:'2026-08-08',url:'youtu.be/zN5tRc1'},
+    {id:'v07',t:'Sunday Slate: Week 3 Overreactions',ch:'Fourth & Long',dur:3120,mix:[6],bias:0.31,pub:'2026-08-19',url:'youtu.be/aJ2sVd7'},
+    {id:'v08',t:'The Cabin on Route 9 (Part 2)',ch:'Cold Case Corner',dur:2880,mix:[7,5],bias:-0.34,pub:'2026-08-02',url:'youtu.be/qF6hYt4'},
+    {id:'v09',t:'I Rebuilt My Portfolio From Zero',ch:'The Weekly Ledger',dur:1500,mix:[8,2],bias:0.28,pub:'2026-08-13',url:'youtu.be/dL9gXs2'},
+    {id:'v10',t:'One-Pan Dinners for a Long Week',ch:'Kitchen Table',dur:780,mix:[10],bias:0.44,pub:'2026-08-15',url:'youtu.be/mC3vTk8'},
+    {id:'v11',t:'Fact-Check Live: Immigration Numbers',ch:'Meridian Reports',dur:1680,mix:[1,0,2],bias:-0.16,pub:'2026-08-21',url:'youtu.be/wS7bNp5'}
+  ];
+  state = {
+    screen:'run', theme:'light', topic:'T02', video:'v01', playing:false, t:312, hover:null, dim:null,
+    adv:true, chunk:30, embed:'all-MiniLM-L6-v2', sent:'twitter-roberta-base', whisper:false,
+    sort:'share', exportFile:'combined', urlText:'', _d:null
+  };
+  DEFAULT_URLS = ['https://www.youtube.com/watch?v=pQ7x2kL','https://www.youtube.com/watch?v=9mXqvB0','https://youtu.be/tR4nwZ9','https://www.youtube.com/watch?v=bH1knQ6','https://www.youtube.com/live/kW8pLm3','https://www.youtube.com/shorts/zN5tRc1','https://www.youtube.com/watch?v=aJ2sVd7','https://youtu.be/qF6hYt4','https://www.youtube.com/watch?v=dL9gXs2','https://www.youtube.com/watch?v=mC3vTk8','https://www.youtube.com/watch?v=wS7bNp5','https://www.youtube.com/watch?v=xxK1lm0','https://www.youtube.com/watch?v=rrT8qw4','https://www.youtube.com/watch?v=uuP2ze6'].join('\n');
+
+  rng(seed){ let s=seed>>>0; return ()=>{ s=(s*1664525+1013904223)>>>0; return s/4294967296; }; }
+  fmtT(s){ s=Math.max(0,Math.round(s)); const m=Math.floor(s/60), r=s%60; return m+':'+String(r).padStart(2,'0'); }
+  fmtDur(s){ const h=Math.floor(s/3600), m=Math.round((s%3600)/60); return h? h+'h '+m+'m' : m+' min'; }
+  sentHex(v){ const d=this.state.theme==='dark'; if(v>0.08) return d?'#3AAFA2':'#14746F'; if(v<-0.08) return d?'#E0705C':'#B4402F'; return '#A29C91'; }
+  sig(v){ return (v>=0?'+':'−')+Math.abs(v).toFixed(2); }
+
+  line(topic, s, rnd){
+    const k = topic.kw, A = k[Math.floor(rnd()*k.length)], B = k[Math.floor(rnd()*k.length)];
+    const pos = ['And credit where it is due — the '+A+' side of this actually held up.','This is the part that works, and nobody says it: '+A+' is doing what it was built to do.','I came in skeptical about '+A+', and I want to walk that back a little.','If you remember one thing about '+B+', let it be that it got better this year.'];
+    const neg = ['The '+A+' story is a mess and nobody in this town wants to own it.','You cannot look at '+B+' and tell me any of this is fine.','Every year they promise something on '+A+', and every year it lands worse.','They keep pointing at '+B+' because the alternative is admitting the whole thing failed.'];
+    const neu = ['So let us walk through what the '+A+' filing actually says, line by line.','Here is the timeline on '+A+', and then we will get to '+B+'.','Quick methodology note before anyone yells at me about '+B+'.','For context: '+A+' has been measured the same way since 2019, which matters here.'];
+    const bank = s>0.12? pos : (s<-0.12? neg : neu);
+    return bank[Math.floor(rnd()*bank.length)];
+  }
+
+  get D(){
+    if(this.state._d) return this.state._d;
+    const rnd = this.rng(20260910), T = this.TOPICS;
+    const videos = this.VIDEOS.map(v=>{
+      const n = Math.max(8, Math.round(v.dur/30/2));
+      const chunks=[]; let i=0, mi=0, s=v.bias;
+      while(i<n){
+        const run = 2+Math.floor(rnd()*5), ti = v.mix[mi % v.mix.length]; mi++;
+        for(let j=0;j<run && i<n;j++,i++){
+          s = s*0.55 + (v.bias + (rnd()-0.5)*1.35)*0.45;
+          s = Math.max(-0.97, Math.min(0.97, s));
+          chunks.push({i,t0:Math.round(i*(v.dur/n)),t1:Math.round((i+1)*(v.dur/n)),topic:ti,s:+s.toFixed(2),text:this.line(T[ti],s,rnd)});
+        }
+      }
+      const cnt={}; chunks.forEach(c=>{cnt[c.topic]=(cnt[c.topic]||0)+1;});
+      const mix = Object.keys(cnt).map(k=>({ti:+k,share:cnt[k]/chunks.length,
+        val:chunks.filter(c=>c.topic===+k).reduce((a,c)=>a+c.s,0)/cnt[k]})).sort((a,b)=>b.share-a.share);
+      return Object.assign({},v,{chunks,mix,val:+(chunks.reduce((a,c)=>a+c.s,0)/chunks.length).toFixed(2),n:chunks.length});
+    });
+    let all=0; const cnt={},sum={},sq={},vids={};
+    videos.forEach(v=>v.chunks.forEach(c=>{ all++; cnt[c.topic]=(cnt[c.topic]||0)+1; sum[c.topic]=(sum[c.topic]||0)+c.s; sq[c.topic]=(sq[c.topic]||0)+c.s*c.s; (vids[c.topic]=vids[c.topic]||{})[v.id]=1; }));
+    const topics = T.map((t,i)=>{ const n=cnt[i]||1, mean=(sum[i]||0)/n, sd=Math.sqrt(Math.max(0,(sq[i]||0)/n-mean*mean));
+      return Object.assign({},t,{idx:i,n,prev:n/(all/0.932),mean:+mean.toFixed(2),sd:+sd.toFixed(2),vids:Object.keys(vids[i]||{}).length}); });
+    const d = {videos, topics, all, outlier:0.068};
+    this.state._d = d; return d;
+  }
+
+  patDef(id, color, kind){
+    const h = React.createElement;
+    if(kind===0) return null;
+    const kids = kind===1 ? [h('path',{key:'a',d:'M0,6 l6,-6 M-1.5,1.5 l3,-3 M4.5,7.5 l3,-3',stroke:'rgba(255,255,255,.55)',strokeWidth:1.4})]
+      : kind===2 ? [h('circle',{key:'a',cx:3,cy:3,r:1.1,fill:'rgba(255,255,255,.6)'})]
+      : [h('path',{key:'a',d:'M3,0 l0,6',stroke:'rgba(255,255,255,.5)',strokeWidth:1.4})];
+    return h('pattern',{id,key:id,width:6,height:6,patternUnits:'userSpaceOnUse'},[h('rect',{key:'b',width:6,height:6,fill:color})].concat(kids));
+  }
+  fillFor(pre, t){ return t.idx%4===0 ? t.color : 'url(#'+pre+'-p'+t.idx+')'; }
+  smooth(pts){ let d='M'+pts[0][0]+','+pts[0][1];
+    for(let i=1;i<pts.length;i++){ const p=pts[i-1],c=pts[i],mx=(p[0]+c[0])/2; d+=' C'+mx+','+p[1]+' '+mx+','+c[1]+' '+c[0]+','+c[1]; }
+    return d; }
+  throughline(v, size, opts){
+    opts=opts||{}; const h=React.createElement, T=this.TOPICS;
+    const cfg={full:{lane:26,gap:9,rib:104,axis:24},med:{lane:13,gap:6,rib:45,axis:0},micro:{lane:6,gap:3,rib:17,axis:0}}[size];
+    const W=1000, H=cfg.lane+cfg.gap+cfg.rib+cfg.axis, pre='tl-'+v.id+'-'+size+(opts.key||'');
+    const mid=cfg.lane+cfg.gap+cfg.rib/2, amp=cfg.rib/2-2, dim=this.state.dim;
+    const segs=[]; let cur=null;
+    v.chunks.forEach(c=>{ if(cur&&cur.topic===c.topic){cur.t1=c.t1;} else {cur={topic:c.topic,t0:c.t0,t1:c.t1};segs.push(cur);} });
+    const x=t=>t/v.dur*W;
+    const defs=h('defs',{key:'d'}, T.map((t,i)=>this.patDef(pre+'-p'+i,t.color,i%4)).filter(Boolean).concat([
+      h('clipPath',{key:'cu',id:pre+'-cu'},h('rect',{x:0,y:cfg.lane+cfg.gap,width:W,height:cfg.rib/2})),
+      h('clipPath',{key:'cd',id:pre+'-cd'},h('rect',{x:0,y:mid,width:W,height:cfg.rib/2}))]));
+    const lane=segs.map((s,i)=>h('rect',{key:'s'+i,x:x(s.t0),y:0,width:Math.max(1,x(s.t1)-x(s.t0)-(size==='micro'?0.6:1.2)),height:cfg.lane,
+      fill:this.fillFor(pre,{idx:s.topic,color:T[s.topic].color}),rx:size==='micro'?1:2,opacity:dim==null||dim===s.topic?1:0.16}));
+    const pts=v.chunks.map(c=>[x((c.t0+c.t1)/2), mid-c.s*amp]);
+    pts.unshift([0,mid-v.chunks[0].s*amp*0.6]); pts.push([W,mid-v.chunks[v.chunks.length-1].s*amp*0.6]);
+    const area=this.smooth(pts)+' L'+W+','+mid+' L0,'+mid+' Z';
+    const posC=this.state.theme==='dark'?'#3AAFA2':'#14746F', negC=this.state.theme==='dark'?'#E0705C':'#B4402F';
+    const ribbon=[
+      h('g',{key:'up',clipPath:'url(#'+pre+'-cu)'},h('path',{d:area,fill:posC,fillOpacity:.82})),
+      h('g',{key:'dn',clipPath:'url(#'+pre+'-cd)'},h('path',{d:area,fill:negC,fillOpacity:.82})),
+      h('line',{key:'ax',x1:0,y1:mid,x2:W,y2:mid,stroke:'currentColor',strokeOpacity:.28,strokeWidth:size==='micro'?0.8:1})];
+    const extras=[];
+    if(cfg.axis){
+      const step=v.dur/6;
+      for(let i=0;i<=6;i++){ const t=i*step;
+        extras.push(h('line',{key:'t'+i,x1:x(t),y1:H-cfg.axis+2,x2:x(t),y2:H-cfg.axis+7,stroke:'currentColor',strokeOpacity:.35}));
+        extras.push(h('text',{key:'l'+i,x:Math.min(W-24,Math.max(14,x(t))),y:H-4,textAnchor:i===0?'start':(i===6?'end':'middle'),fontSize:12,fontFamily:'IBM Plex Mono, monospace',fill:'currentColor',fillOpacity:.55},this.fmtT(t))); }
+      extras.push(h('text',{key:'py',x:6,y:cfg.lane+cfg.gap+11,fontSize:11,fontFamily:'IBM Plex Mono, monospace',fill:posC},'+1'));
+      extras.push(h('text',{key:'ny',x:6,y:cfg.lane+cfg.gap+cfg.rib-3,fontSize:11,fontFamily:'IBM Plex Mono, monospace',fill:negC},'−1'));
+    }
+    if(opts.time!=null){ const px=x(Math.min(v.dur,opts.time));
+      extras.push(h('g',{key:'ph'},[h('line',{key:'l',x1:px,y1:0,x2:px,y2:cfg.lane+cfg.gap+cfg.rib,stroke:'currentColor',strokeWidth:1.6}),
+        h('circle',{key:'c',cx:px,cy:0,r:4,fill:'currentColor'})])); }
+    if(opts.hover){ const px=x(opts.hover.t0+(opts.hover.t1-opts.hover.t0)/2);
+      extras.push(h('line',{key:'hv',x1:px,y1:0,x2:px,y2:cfg.lane+cfg.gap+cfg.rib,stroke:'currentColor',strokeOpacity:.4,strokeDasharray:'3 3'})); }
+    return h('svg',{viewBox:'0 0 '+W+' '+H,preserveAspectRatio:'none',
+      style:{width:'100%',height:(size==='full'?163:(size==='med'?64:26))+'px',display:'block',color:'var(--ink)',cursor:opts.onClick?'crosshair':'default'},
+      onMouseMove:opts.onMove,onMouseLeave:opts.onLeave,onClick:opts.onClick},
+      [defs,h('g',{key:'lane'},lane),h('g',{key:'rib'},ribbon),h('g',{key:'ex'},extras)]);
+  }
+  swatch(t0,size){ const h=React.createElement, s=size||14;
+    const idx = t0.idx!=null ? t0.idx : this.TOPICS.findIndex(x=>x.id===t0.id);
+    const t = {idx, color:t0.color}, pre='sw-'+idx+'-'+s;
+    return h('svg',{width:s,height:s,viewBox:'0 0 6 6',style:{display:'block',borderRadius:'2px'}},
+      [h('defs',{key:'d'},this.patDef(pre+'-p'+idx,t.color,idx%4)),h('rect',{key:'r',width:6,height:6,fill:this.fillFor(pre,t)})]); }
+  valMini(v){ const h=React.createElement,W=54,H=10;
+    return h('svg',{width:W,height:H,viewBox:'0 0 '+W+' '+H,style:{display:'block'}},[
+      h('rect',{key:'b',x:0,y:4,width:W,height:2,fill:'var(--line)'}),
+      h('line',{key:'m',x1:W/2,y1:0,x2:W/2,y2:H,stroke:'var(--line2)',strokeWidth:1}),
+      h('rect',{key:'v',x:v<0?W/2+v*(W/2):W/2,y:2,width:Math.max(1.5,Math.abs(v)*(W/2)),height:6,fill:this.sentHex(v),rx:1})]); }
+  valChip(v){ const h=React.createElement;
+    return h('span',{style:{display:'inline-flex',alignItems:'center',gap:'7px',justifyContent:'flex-end'}},[
+      h('span',{key:'m'},this.valMini(v)),
+      h('span',{key:'t',style:{font:'500 12px "IBM Plex Mono", monospace',color:this.sentHex(v),minWidth:'44px',textAlign:'right'}},this.sig(v))]); }
+  stackBar(mix,height,radius){ const h=React.createElement,T=this.TOPICS;
+    return h('div',{style:{display:'flex',height:(height||16)+'px',borderRadius:(radius==null?3:radius)+'px',overflow:'hidden',background:'var(--sunk)'}},
+      mix.map((m,i)=>{ const t=T[m.ti]; const pre='st-'+i+'-'+m.ti+'-'+(height||16);
+        return h('div',{key:i,title:t.label,style:{width:(m.share*100)+'%',background:t.color}},
+          m.ti%4===0?null:h('svg',{width:'100%',height:'100%',style:{display:'block'}},[
+            h('defs',{key:'d'},this.patDef(pre,t.color,m.ti%4)),h('rect',{key:'r',width:'100%',height:'100%',fill:'url(#'+pre+')'})])); })); }
+
+  go = (screen) => () => this.setState({screen, hover:null});
+  goTopic = (id) => () => this.setState({screen:'topics', topic:id});
+  goVideo = (id,t) => () => this.setState({screen:'video', video:id, t:t==null?0:t, playing:false, hover:null, dim:null});
+  toggleTheme = () => { const n=this.state.theme==='light'?'dark':'light'; document.documentElement.setAttribute('data-theme',n); this.setState({theme:n}); };
+  componentDidMount(){
+    document.documentElement.setAttribute('data-theme', this.state.theme);
+    if(!this.state.urlText) this.setState({urlText:this.DEFAULT_URLS});
+    this._iv = setInterval(()=>{ if(this.state.playing && this.state.screen==='video'){
+      const v=this.D.videos.find(x=>x.id===this.state.video);
+      this.setState(s=>({t: s.t+1>=v.dur?0:s.t+1})); } }, 420);
+  }
+  componentWillUnmount(){ clearInterval(this._iv); }
+
+  renderVals(){
+    const h=React.createElement, D=this.D, T=this.TOPICS, S=this.state;
+    const video = D.videos.find(v=>v.id===S.video)||D.videos[0];
+    const topic = D.topics.find(t=>t.id===S.topic)||D.topics[0];
+    const screen = S.screen;
+    const navItems=[['run','New run',''],['prog','Run progress','◷'],['batch','Batch overview','11'],['topics','Topics','12'],['tsent','Topic sentiment',''],['video','Video page',''],['export','Export',''],['found','Foundations','']];
+    const nav = navItems.map(([k,label,tag])=>({label,tag,dot:screen===k?'var(--ink)':'transparent',
+      style:'display:flex;align-items:center;gap:9px;background:'+(screen===k?'var(--sunk)':'none')+';border:none;border-radius:3px;padding:8px 10px;font:'+(screen===k?'500':'400')+' 13px "IBM Plex Sans",sans-serif;color:'+(screen===k?'var(--ink)':'var(--ink2)')+';cursor:pointer',
+      go:this.go(k)}));
+    const cb={run:[['Throughline','run'],['New run','run']],prog:[['Throughline','run'],['Run 14:02','prog']],
+      batch:[['Run 14:02','prog'],['Batch overview','batch']],
+      topics:[['Run 14:02','prog'],['Batch overview','batch'],['Topics','topics']],
+      tsent:[['Run 14:02','prog'],['Batch overview','batch'],['Topic sentiment','tsent']],
+      video:[['Run 14:02','prog'],['Batch overview','batch'],['Topics','topics'],[video.t.slice(0,32)+'…','video']],
+      export:[['Run 14:02','prog'],['Batch overview','batch'],['Export','export']],
+      found:[['Throughline','run'],['Foundations','found']]}[screen];
+    const crumbs = cb.map((c,i)=>({label:c[0],sep:i<cb.length-1?'/':'',go:this.go(c[1]),
+      style:'background:none;border:none;padding:0;cursor:pointer;font:'+(i===cb.length-1?'500':'400')+' 12px "IBM Plex Mono",monospace;color:'+(i===cb.length-1?'var(--ink)':'var(--ink3)')}));
+    const mark = h('svg',{viewBox:'0 0 22 22',width:22,height:22,style:{display:'block'}},[
+      h('rect',{key:'a',x:0,y:2,width:9,height:5,rx:1,fill:'#4477AA'}),
+      h('rect',{key:'b',x:9.6,y:2,width:5,height:5,rx:1,fill:'#CC6677'}),
+      h('rect',{key:'c',x:15.2,y:2,width:6.8,height:5,rx:1,fill:'#117733'}),
+      h('path',{key:'d',d:'M0,15 C4,15 4,10.5 8,10.5 C12,10.5 12,19 16,19 C19,19 20,15 22,15',fill:'none',stroke:'var(--ink)',strokeWidth:1.6})]);
+
+    const vRow = v => ({title:v.t, channel:v.ch, durLabel:this.fmtDur(v.dur), micro:this.throughline(v,'micro',{}),
+      valChip:this.valChip(v.val), nTopics:String(v.mix.length), topline:T[v.mix[0].ti].label, go:this.goVideo(v.id,0)});
+
+    // new run
+    const urls = (S.urlText||this.DEFAULT_URLS).split('\n').map(u=>u.trim()).filter(Boolean);
+    const chunkOpts = [15,30,60,120].map(c=>({label:c+' s',go:()=>this.setState({chunk:c}),
+      style:'flex:1;background:'+(S.chunk===c?'var(--ink)':'var(--surface)')+';color:'+(S.chunk===c?'var(--paper)':'var(--ink2)')+';border:1px solid '+(S.chunk===c?'var(--ink)':'var(--line)')+';border-radius:3px;padding:8px;font:500 12.5px "IBM Plex Mono",monospace;cursor:pointer'}));
+    const modelPickers = [
+      {name:'Embedding model',key:'embed',opts:[['all-MiniLM-L6-v2','fast, 384-dim · default'],['bge-base-en-v1.5','stronger clusters, ~3× slower'],['e5-large-v2','best recall, GPU recommended']]},
+      {name:'Sentiment model',key:'sent',opts:[['twitter-roberta-base','tuned on speech-like text · default'],['distilbert-sst2','binary, faster, coarser'],['vader-lexicon','lexicon only, no GPU']]}
+    ].map(p=>({name:p.name, opts:p.opts.map(o=>({id:o[0],note:o[1],go:()=>this.setState({[p.key]:o[0]}),
+      style:'text-align:left;background:'+(S[p.key]===o[0]?'var(--sunk)':'none')+';border:1px solid '+(S[p.key]===o[0]?'var(--ink)':'var(--line)')+';border-radius:3px;padding:9px 11px;cursor:pointer'}))}));
+    const runSummary = [
+      {k:'URLs parsed',v:String(urls.length)},{k:'Duplicates removed',v:'0'},
+      {k:'Chunk size',v:S.chunk+' s'},{k:'Embeddings',v:S.embed},{k:'Sentiment',v:S.sent},
+      {k:'Whisper fallback',v:S.whisper?'on · slow':'off'},
+      {k:'Est. run time',v:S.whisper?'~48 min':'~7 min'}
+    ];
+
+    // progress
+    const stages=[
+      {n:'Fetching transcripts',s:'done',p:1,note:'11 ok · 2 skipped · 1 queued'},
+      {n:'Chunking ('+S.chunk+' s)',s:'done',p:1,note:'3,142 chunks'},
+      {n:'Embedding · '+S.embed,s:'run',p:0.62,note:'1,948/3,142 · ~2m 10s'},
+      {n:'Topic modelling (BERTopic, whole batch)',s:'queue',p:0,note:'needs all embeddings first'},
+      {n:'Sentiment · '+S.sent,s:'queue',p:0,note:'chunk-level, −1 … +1'}
+    ];
+    const stageList = h('div',{style:{display:'flex',flexDirection:'column',gap:'16px'}}, stages.map((st,i)=>{
+      const col = st.s==='done'?'var(--pos)':(st.s==='run'?'var(--ink)':'var(--line2)');
+      return h('div',{key:i},[
+        h('div',{key:'r',style:{display:'flex',alignItems:'baseline',justifyContent:'space-between',gap:'12px',marginBottom:'6px'}},[
+          h('span',{key:'a',style:{display:'flex',alignItems:'center',gap:'8px',fontSize:'13.5px',fontWeight:st.s==='run'?600:400,color:st.s==='queue'?'var(--ink3)':'var(--ink)'}},[
+            h('span',{key:'d',style:{width:'7px',height:'7px',borderRadius:'50%',background:col,animation:st.s==='run'?'tlpulse 1.6s infinite':'none'}}), st.n]),
+          h('span',{key:'b',style:{font:'400 11px "IBM Plex Mono", monospace',color:'var(--ink3)'}},st.note)]),
+        h('div',{key:'p',style:{height:'7px',background:'var(--sunk)',borderRadius:'3px',overflow:'hidden'}},
+          h('div',{style:{height:'100%',width:(st.p*100)+'%',background:col,
+            backgroundImage:st.s==='run'?'repeating-linear-gradient(90deg,rgba(255,255,255,.35) 0 6px,transparent 6px 14px)':'none',
+            animation:st.s==='run'?'tlbar 1.1s linear infinite':'none'}}))]);
+    }));
+    const statusRows = D.videos.map((v,i)=>({title:v.t, state:i<7?'transcript ok · '+v.n+' chunks':'embedding…', ok:true}))
+      .concat([
+        {title:'Late Night Lo-Fi — 3 Hour Study Mix',state:'skipped · no transcript available',bad:true},
+        {title:'[removed by uploader]',state:'skipped · video unavailable',bad:true},
+        {title:'Heat Domes and Home Insurance',state:'queued',queue:true}
+      ]);
+    const urlStatus = statusRows.map(r=>({title:r.title, state:r.state,
+      color: r.bad?'var(--neg)':(r.queue?'var(--ink3)':'var(--pos)'),
+      dotStyle:'width:9px;height:9px;margin-top:4px;border-radius:50%;background:'+(r.bad?'var(--neg)':(r.queue?'transparent':'var(--pos)'))+';border:1.5px solid '+(r.queue?'var(--line2)':'transparent')}));
+
+    // batch overview
+    const totalDur = D.videos.reduce((a,v)=>a+v.dur,0);
+    const batchStats=[
+      {label:'VIDEOS ANALYZED',v:'11',sub:'of 14 submitted · 3 skipped, listed right'},
+      {label:'DURATION READ',v:(totalDur/3600).toFixed(1)+' h',sub:'transcript time, excluding skips'},
+      {label:'CHUNKS',v:D.all.toLocaleString(),sub:S.chunk+' s each · 214 in the outlier bin'},
+      {label:'TOPICS FOUND',v:'12',sub:'one shared model · plus outlier bin'},
+      {label:'BATCH VALENCE',v:this.sig(+(D.videos.reduce((a,v)=>a+v.val,0)/D.videos.length).toFixed(2)),sub:'mean of chunk scores, unweighted'}
+    ];
+    const allS=[]; D.videos.forEach(v=>v.chunks.forEach(c=>allS.push(c.s)));
+    const bins=new Array(11).fill(0); allS.forEach(s=>{bins[Math.min(10,Math.max(0,Math.round((s+1)/2*10)))]++;});
+    const maxB=Math.max.apply(null,bins)||1;
+    const batchHist = h('svg',{viewBox:'0 0 480 160',style:{width:'100%',height:'auto',display:'block'}},
+      bins.map((b,i)=>{ const val=-1+i*0.2, x=14+i*42, hgt=b/maxB*104;
+        return h('g',{key:i},[
+          h('rect',{key:'r',x:x,y:118-hgt,width:34,height:Math.max(1,hgt),fill:this.sentHex(val),rx:1}),
+          h('text',{key:'t',x:x+17,y:133,textAnchor:'middle',fontSize:10,fontFamily:'IBM Plex Mono, monospace',fill:'var(--ink3)'},val.toFixed(1)),
+          h('text',{key:'n',x:x+17,y:118-hgt-5,textAnchor:'middle',fontSize:9.5,fontFamily:'IBM Plex Mono, monospace',fill:'var(--ink3)'},b)]);
+      }).concat([
+        h('line',{key:'ax',x1:8,y1:118.5,x2:472,y2:118.5,stroke:'var(--line2)'}),
+        h('text',{key:'xl',x:240,y:152,textAnchor:'middle',fontSize:10.5,fontFamily:'IBM Plex Mono, monospace',fill:'var(--ink3)'},'chunk valence (−1 negative … +1 positive) · y = chunk count')]));
+    const mean = allS.reduce((a,b)=>a+b,0)/allS.length;
+    const sd = Math.sqrt(allS.reduce((a,b)=>a+(b-mean)*(b-mean),0)/allS.length);
+    const batchSentStats=[
+      {k:'mean valence',v:this.sig(+mean.toFixed(2)),color:this.sentHex(mean)},
+      {k:'SD (controversy)',v:sd.toFixed(2),color:'var(--ink)'},
+      {k:'negative chunks',v:Math.round(allS.filter(s=>s<-0.08).length/allS.length*100)+'%',color:'var(--neg)'},
+      {k:'positive chunks',v:Math.round(allS.filter(s=>s>0.08).length/allS.length*100)+'%',color:'var(--pos)'}
+    ];
+    const skips=[
+      {title:'Late Night Lo-Fi — 3 Hour Study Mix',url:'youtu.be/xxK1lm0',color:'var(--warn)',cta:'Retry with Whisper',
+       why:'No caption track and no speech we could reach. Music-only audio; nothing to chunk.'},
+      {title:'[removed by uploader]',url:'youtu.be/rrT8qw4',color:'var(--neg)',cta:'Remove from list',
+       why:'The video was unavailable when we fetched it — deleted, private, or region-locked.'},
+      {title:'Heat Domes and Home Insurance',url:'youtu.be/uuP2ze6',color:'var(--warn)',cta:'Retry fetch',
+       why:'Captions were auto-generated but returned empty twice. Retry usually clears this.'}
+    ];
+
+    // topics
+    const sorted = D.topics.slice().sort((a,b)=>b.prev-a.prev);
+    const maxM = sorted[0].prev;
+    const topicCards = sorted.map((t,i)=>{
+      const ctrl = t.sd>0.55?'high':(t.sd>0.42?'moderate':'low');
+      return {label:t.label, id:t.id, vids:String(t.vids), kw:t.kw.slice(0,i<2?5:3), color:t.color, swatch:this.swatch(t,i<2?18:14),
+        titleSize:(i<2?20:16)+'px',
+        cardStyle:'grid-column:span '+(i<2?4:3)+';min-height:'+(i<2?208:196)+'px;display:flex;flex-direction:column;gap:12px;background:var(--surface);border:1px solid var(--line);border-top:3px solid '+t.color+';border-radius:4px;padding:18px;cursor:pointer;color:var(--ink)',
+        metricVal:(t.prev*100).toFixed(1)+'%', barW:(t.prev/maxM*100).toFixed(1)+'%',
+        valNum:this.sig(t.mean), valMini:this.valMini(t.mean),
+        ctrl:'controversy '+ctrl, spread:t.sd.toFixed(2),
+        ctrlStyle:'padding:3px 6px;border-radius:2px;border:1px solid '+(ctrl==='high'?'var(--neg)':'var(--line)')+';color:'+(ctrl==='high'?'var(--neg)':'var(--ink3)')+';font:500 10.5px "IBM Plex Mono",monospace',
+        go:this.goTopic(t.id)};
+    });
+    const shareMix = sorted.map(t=>({ti:t.idx, share:t.prev}));
+    const shareBar = h('div',{},[
+      h('div',{key:'b',style:{display:'flex',height:'26px',borderRadius:'3px',overflow:'hidden',border:'1px solid var(--line)'}},
+        shareMix.map((m,i)=>{ const t=T[m.ti], pre='shb-'+m.ti;
+          return h('div',{key:i,title:t.label,style:{width:(m.share*100)+'%',background:t.color}},
+            m.ti%4===0?null:h('svg',{width:'100%',height:'100%',style:{display:'block'}},[
+              h('defs',{key:'d'},this.patDef(pre,t.color,m.ti%4)),h('rect',{key:'r',width:'100%',height:'100%',fill:'url(#'+pre+')'})])); })
+        .concat([h('div',{key:'out',title:'Outlier bin',style:{width:(D.outlier*100)+'%',background:'repeating-linear-gradient(45deg,var(--line2) 0 3px,transparent 3px 6px)'}})])),
+      h('div',{key:'l',style:{display:'flex',justifyContent:'space-between',marginTop:'7px',font:'400 11px "IBM Plex Mono", monospace',color:'var(--ink3)'}},
+        [h('span',{key:'a'},'0%'),h('span',{key:'b'},'12 topics · outlier bin 6.8% at the right end'),h('span',{key:'c'},'100%')])]);
+    const shareLegend = sorted.slice(0,6).map(t=>({label:t.label,pct:(t.prev*100).toFixed(1)+'%',swatch:this.swatch(t,12)}));
+    const tChunks=[]; D.videos.forEach(v=>v.chunks.forEach(c=>{ if(c.topic===topic.idx) tChunks.push({c,v}); }));
+    const quotes = tChunks.slice().sort((a,b)=>Math.abs(b.c.s)-Math.abs(a.c.s)).slice(0,6).map(o=>({
+      text:o.c.text, title:o.v.t, channel:o.v.ch, stamp:this.fmtT(o.c.t0), sentLabel:'valence '+this.sig(o.c.s),
+      go:this.goVideo(o.v.id,o.c.t0),
+      sentChip:h('span',{style:{display:'block',width:'26px',height:'8px',borderRadius:'2px',background:this.sentHex(o.c.s)}})}));
+
+    // topic sentiment
+    const sortOpts=[['share','Share'],['mean','Valence'],['sd','Controversy']].map(o=>({label:o[1],go:()=>this.setState({sort:o[0]}),
+      style:'background:'+(S.sort===o[0]?'var(--ink)':'var(--surface)')+';color:'+(S.sort===o[0]?'var(--paper)':'var(--ink2)')+';border:1px solid '+(S.sort===o[0]?'var(--ink)':'var(--line)')+';border-radius:3px;padding:6px 11px;font:500 12px "IBM Plex Sans",sans-serif;cursor:pointer'}));
+    const ordered = D.topics.slice().sort((a,b)=> S.sort==='share'? b.prev-a.prev : (S.sort==='mean'? a.mean-b.mean : b.sd-a.sd));
+    const rowH=30, chartH=ordered.length*rowH+46, cw=1000, lw=220, aw=cw-lw-40;
+    const divergingChart = h('svg',{viewBox:'0 0 '+cw+' '+chartH,style:{width:'100%',height:'auto',display:'block'}},
+      ordered.map((t,i)=>{ const y=i*rowH+22, cx=lw+aw/2;
+        return h('g',{key:t.id},[
+          h('text',{key:'l',x:lw-10,y:y+5,textAnchor:'end',fontSize:13,fontFamily:'IBM Plex Sans, sans-serif',fill:'var(--ink)'},t.label),
+          h('rect',{key:'sw',x:lw-10-Math.min(200,t.label.length*7.4)-16,y:y-6,width:11,height:11,rx:2,fill:t.color}),
+          h('line',{key:'sd',x1:cx+Math.max(-1,t.mean-t.sd)*(aw/2),y1:y,x2:cx+Math.min(1,t.mean+t.sd)*(aw/2),y2:y,stroke:this.sentHex(t.mean),strokeOpacity:.3,strokeWidth:11,strokeLinecap:'round'}),
+          h('circle',{key:'m',cx:cx+t.mean*(aw/2),cy:y,r:5.5,fill:this.sentHex(t.mean)}),
+          h('text',{key:'v',x:cw-6,y:y+5,textAnchor:'end',fontSize:12,fontFamily:'IBM Plex Mono, monospace',fill:this.sentHex(t.mean)},this.sig(t.mean))]);
+      }).concat([
+        h('line',{key:'zero',x1:lw+aw/2,y1:6,x2:lw+aw/2,y2:ordered.length*rowH+16,stroke:'var(--line2)'}),
+        h('line',{key:'axl',x1:lw,y1:ordered.length*rowH+16,x2:lw+aw,y2:ordered.length*rowH+16,stroke:'var(--line)'}),
+        h('text',{key:'a1',x:lw,y:ordered.length*rowH+34,fontSize:11,fontFamily:'IBM Plex Mono, monospace',fill:'var(--ink3)'},'−1.0 negative'),
+        h('text',{key:'a2',x:lw+aw/2,y:ordered.length*rowH+34,textAnchor:'middle',fontSize:11,fontFamily:'IBM Plex Mono, monospace',fill:'var(--ink3)'},'0 neutral'),
+        h('text',{key:'a3',x:lw+aw,y:ordered.length*rowH+34,textAnchor:'end',fontSize:11,fontFamily:'IBM Plex Mono, monospace',fill:'var(--ink3)'},'+1.0 positive')]));
+    const sentTable = ordered.map(t=>({label:t.label, swatch:this.swatch(t,13), n:t.n.toLocaleString(),
+      share:(t.prev*100).toFixed(1)+'%', mean:this.sig(t.mean), meanColor:this.sentHex(t.mean), sd:t.sd.toFixed(2),
+      go:this.goTopic(t.id),
+      ctrlBar:h('span',{style:{display:'flex',alignItems:'center',gap:'7px'}},[
+        h('span',{key:'b',style:{display:'block',width:'52px',height:'6px',borderRadius:'3px',background:'var(--sunk)',overflow:'hidden'}},
+          h('span',{style:{display:'block',height:'100%',width:Math.min(100,t.sd/0.7*100)+'%',background:t.sd>0.55?'var(--neg)':'var(--ink2)'}})),
+        h('span',{key:'t',style:{font:'400 11px "IBM Plex Mono", monospace',color:'var(--ink3)'}},t.sd>0.55?'high':(t.sd>0.42?'mod':'low'))])}));
+    const hmT = D.topics.slice().sort((a,b)=>b.prev-a.prev);
+    const cellW=58, labelW=250, hmH=D.videos.length*26+96;
+    const heatmap = h('div',{style:{overflowX:'auto'}}, h('svg',{viewBox:'0 0 '+(labelW+hmT.length*cellW+20)+' '+hmH,
+      style:{width:'100%',minWidth:(labelW+hmT.length*cellW)+'px',height:'auto',display:'block'}},
+      [].concat(
+        hmT.map((t,ci)=>h('g',{key:'h'+ci},[
+          h('rect',{key:'s',x:labelW+ci*cellW+cellW/2-6,y:52,width:12,height:12,rx:2,fill:t.color}),
+          h('text',{key:'t',x:labelW+ci*cellW+cellW/2,y:46,textAnchor:'start',fontSize:11.5,fontFamily:'IBM Plex Sans, sans-serif',fill:'var(--ink2)',
+            transform:'rotate(-52 '+(labelW+ci*cellW+cellW/2)+' 46)'},t.label)])),
+        D.videos.map((v,ri)=>{
+          const y=76+ri*26;
+          const cells = hmT.map((t,ci)=>{ const m=v.mix.find(x=>x.ti===t.idx); const s=m?m.share:0;
+            return h('g',{key:'c'+ci},[
+              h('rect',{x:labelW+ci*cellW+3,y:y,width:cellW-6,height:22,rx:2,fill:s?t.color:'var(--sunk)',fillOpacity:s?(0.18+s*0.82):1,
+                stroke:'var(--line)',strokeWidth:0.5}),
+              s? h('text',{x:labelW+ci*cellW+cellW/2,y:y+15,textAnchor:'middle',fontSize:10.5,fontFamily:'IBM Plex Mono, monospace',
+                fill:s>0.45?'#FFFFFF':'var(--ink2)'}, Math.round(s*100)) : null]);
+          });
+          return h('g',{key:'r'+ri,style:{cursor:'pointer'},onClick:this.goVideo(v.id,0)},[
+            h('text',{key:'l',x:labelW-12,y:y+15,textAnchor:'end',fontSize:12,fontFamily:'IBM Plex Sans, sans-serif',fill:'var(--ink)'},
+              v.t.length>34? v.t.slice(0,33)+'…' : v.t)].concat(cells));
+        }),
+        [h('text',{key:'note',x:labelW,y:hmH-6,fontSize:11,fontFamily:'IBM Plex Mono, monospace',fill:'var(--ink3)'},
+          'cell value = % of that video\u2019s chunks · blank = topic absent · n = 11 videos × 12 topics')])));
+
+    // video page
+    const chunkAt = video.chunks.find(c=>S.t>=c.t0&&S.t<c.t1)||video.chunks[0];
+    const hoverChunk = S.hover!=null? video.chunks[Math.min(video.chunks.length-1,Math.max(0,S.hover))] : null;
+    const seekFrom = e => { const r=e.currentTarget.getBoundingClientRect(); return Math.max(0,Math.min(video.dur,(e.clientX-r.left)/r.width*video.dur)); };
+    const throughlineFull = h('div',{style:{position:'relative'}},[
+      this.throughline(video,'full',{time:S.t,hover:hoverChunk,
+        onMove:e=>{ const t=seekFrom(e); const i=video.chunks.findIndex(c=>t>=c.t0&&t<c.t1); if(i>=0&&i!==S.hover) this.setState({hover:i}); },
+        onLeave:()=>this.setState({hover:null}),
+        onClick:e=>this.setState({t:seekFrom(e)})}),
+      hoverChunk? h('div',{key:'tip',style:{position:'absolute',top:'-6px',left:Math.min(72,hoverChunk.t0/video.dur*100)+'%',
+        transform:'translate(-10%,-100%)',minWidth:'260px',maxWidth:'330px',background:'var(--surface)',border:'1px solid var(--line2)',
+        borderRadius:'4px',padding:'12px 14px',boxShadow:'0 6px 22px rgba(0,0,0,.14)',pointerEvents:'none',zIndex:5}},[
+        h('div',{key:'a',style:{display:'flex',alignItems:'center',gap:'8px',marginBottom:'8px'}},[
+          h('span',{key:'s'},this.swatch(T[hoverChunk.topic],12)),
+          h('span',{key:'l',style:{fontSize:'12.5px',fontWeight:600}},T[hoverChunk.topic].label),
+          h('span',{key:'t',style:{marginLeft:'auto',font:'400 11.5px "IBM Plex Mono", monospace',color:'var(--ink3)'}},this.fmtT(hoverChunk.t0))]),
+        h('div',{key:'b',style:{fontFamily:'Source Serif 4, Georgia, serif',fontSize:'14px',lineHeight:1.45,color:'var(--ink2)'}},'“'+hoverChunk.text+'”'),
+        h('div',{key:'c',style:{display:'flex',alignItems:'center',gap:'8px',marginTop:'10px',paddingTop:'9px',borderTop:'1px solid var(--line)'}},[
+          this.valMini(hoverChunk.s),
+          h('span',{key:'v',style:{font:'500 11.5px "IBM Plex Mono", monospace',color:this.sentHex(hoverChunk.s)}},'valence '+this.sig(hoverChunk.s)),
+          h('span',{key:'k',style:{marginLeft:'auto',font:'400 11px "IBM Plex Mono", monospace',color:'var(--ink3)'}},'click to seek')])]):null]);
+    const player = h('div',{style:{position:'relative',aspectRatio:'16 / 9',width:'100%',overflow:'hidden'}},[
+      h('svg',{key:'ph',width:'100%',height:'100%',style:{display:'block',position:'absolute',inset:0}},[
+        h('defs',{key:'d'},h('pattern',{id:'plph',width:14,height:14,patternUnits:'userSpaceOnUse',patternTransform:'rotate(45)'},
+          [h('rect',{key:'a',width:14,height:14,fill:'#141613'}),h('rect',{key:'b',width:6,height:14,fill:'#1B1E1A'})])),
+        h('rect',{key:'r',width:'100%',height:'100%',fill:'url(#plph)'})]),
+      h('div',{key:'lbl',style:{position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:'10px'}},[
+        h('div',{key:'a',style:{font:'400 11px "IBM Plex Mono", monospace',letterSpacing:'.14em',color:'#7E857A'}},'YOUTUBE IFRAME EMBED · 16:9'),
+        h('div',{key:'b',style:{font:'400 12px "IBM Plex Mono", monospace',color:'#9AA095'}},video.url+' · seeks via postMessage')]),
+      h('div',{key:'t',style:{position:'absolute',left:'14px',bottom:'12px',font:'500 12px "IBM Plex Mono", monospace',color:'#D6D9D2',background:'rgba(0,0,0,.45)',padding:'4px 8px',borderRadius:'2px'}},this.fmtT(S.t)+' / '+this.fmtT(video.dur))]);
+    const videoLegend = video.mix.map(m=>({label:T[m.ti].label,share:(m.share*100).toFixed(0)+'%',swatch:this.swatch(T[m.ti],12),
+      go:()=>this.setState({dim:S.dim===m.ti?null:m.ti}),
+      style:'display:flex;align-items:center;gap:7px;background:'+(S.dim===m.ti?'var(--sunk)':'none')+';border:1px solid '+(S.dim===m.ti?'var(--line2)':'transparent')+';border-radius:3px;padding:5px 8px;font:400 12px "IBM Plex Sans",sans-serif;color:var(--ink2);cursor:pointer'}));
+    const videoMeta=[{k:'url',v:video.url},{k:'channel',v:video.ch},{k:'published',v:video.pub},{k:'runtime',v:this.fmtDur(video.dur)},
+      {k:'chunks ('+S.chunk+' s)',v:String(video.n)},{k:'transcript',v:'captions · en'},{k:'topics present',v:String(video.mix.length)+' of 12'}];
+    const videoMix = video.mix.map(m=>({label:T[m.ti].label,share:(m.share*100).toFixed(0)+'%',swatch:this.swatch(T[m.ti],13),go:this.goTopic(T[m.ti].id)}));
+    const videoSentBars = h('div',{style:{display:'flex',flexDirection:'column',gap:'12px'}},
+      video.mix.map((m,i)=>{ const w=170;
+        return h('div',{key:i},[
+          h('div',{key:'a',style:{display:'flex',alignItems:'center',gap:'8px',marginBottom:'5px'}},[
+            this.swatch(T[m.ti],11),
+            h('span',{key:'l',style:{fontSize:'12px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},T[m.ti].label),
+            h('span',{key:'v',style:{marginLeft:'auto',font:'500 11.5px "IBM Plex Mono", monospace',color:this.sentHex(m.val)}},this.sig(+m.val.toFixed(2)))]),
+          h('svg',{key:'b',viewBox:'0 0 '+w+' 16',style:{width:'100%',height:'16px',display:'block'}},[
+            h('line',{key:'ax',x1:0,y1:8,x2:w,y2:8,stroke:'var(--line)'}),
+            h('line',{key:'m',x1:w/2,y1:1,x2:w/2,y2:15,stroke:'var(--line2)'}),
+            h('line',{key:'sd',x1:w/2+(m.val-0.28)*(w/2),y1:8,x2:w/2+(m.val+0.28)*(w/2),y2:8,stroke:this.sentHex(m.val),strokeOpacity:.35,strokeWidth:6}),
+            h('circle',{key:'p',cx:w/2+m.val*(w/2),cy:8,r:4,fill:this.sentHex(m.val)})])]); }));
+    const entPool=[['the governor',14],['Ohio',11],['the Fed',9],['county board',7],['Springfield',6],['the committee',5],['NOAA',4],['state police',3]];
+    const entities = entPool.map(e=>({name:e[0],n:String(e[1])}));
+    const transcript = video.chunks.map(c=>({stamp:this.fmtT(c.t0),text:c.text,go:this.goVideo(video.id,c.t0),
+      style:'display:grid;grid-template-columns:60px minmax(0,1fr) 80px;gap:14px;align-items:baseline;padding:11px 22px 11px 19px;border-bottom:1px solid var(--line);border-left:3px solid '+T[c.topic].color+';cursor:pointer;background:'+(c===chunkAt?'var(--sunk)':'transparent'),
+      sentChip:h('span',{style:{display:'inline-flex',alignItems:'center',gap:'6px'}},[this.valMini(c.s),
+        h('span',{key:'v',style:{font:'400 11px "IBM Plex Mono", monospace',color:'var(--ink3)'}},this.sig(c.s))])}));
+
+    // export
+    const files=[
+      {k:'combined',file:'throughline_chunks_combined.csv',desc:'Every chunk of every video — the analysis unit'},
+      {k:'video',file:'throughline_video_summary.csv',desc:'One row per video: topic shares and valence'},
+      {k:'topic',file:'throughline_topics.csv',desc:'One row per topic: keywords, prevalence, valence, SD'}
+    ];
+    const exportFiles = files.map(f=>({file:f.file,desc:f.desc,go:()=>this.setState({exportFile:f.k}),
+      style:'width:100%;text-align:left;background:'+(S.exportFile===f.k?'var(--sunk)':'none')+';border:1px solid '+(S.exportFile===f.k?'var(--ink)':'var(--line)')+';border-radius:3px;padding:11px 12px;cursor:pointer'}));
+    const schemas={
+      combined:[['video_id','string','YouTube ID as submitted'],['video_title','string','Title at fetch time'],['chunk_index','int','0-based, in playback order'],['start_s','float','Chunk start in seconds — the seek target'],['end_s','float','Chunk end in seconds'],['text','string','Transcript text, quoted and escaped'],['topic_id','int','−1 = outlier bin, otherwise 0…11'],['topic_label','string','Generated label for the topic'],['topic_prob','float','Assignment confidence, 0…1'],['valence','float','Sentiment, −1 … +1']],
+      video:[['video_id','string','YouTube ID as submitted'],['video_title','string','Title at fetch time'],['duration_s','float','Runtime read'],['n_chunks','int','Chunks after chunking at '+S.chunk+' s'],['topic_share_0…11','float','Share of this video\u2019s chunks per topic'],['outlier_share','float','Share in the outlier bin'],['mean_valence','float','Unweighted mean of chunk valence'],['sd_valence','float','Controversy within this video']],
+      topic:[['topic_id','int','−1 = outlier bin'],['topic_label','string','Generated, editable in the UI'],['keywords','string','Top 10 c-TF-IDF terms, pipe-separated'],['n_chunks','int','Chunks assigned across the batch'],['share','float','Share of all chunks'],['n_videos','int','Videos containing the topic'],['mean_valence','float','Mean chunk valence'],['sd_valence','float','Controversy measure']]
+    };
+    const schema = schemas[S.exportFile].map(s=>({col:s[0],type:s[1],desc:s[2]}));
+    const previewCols = {combined:['video_id','chunk_index','start_s','topic_id','topic_label','valence'],
+      video:['video_id','duration_s','n_chunks','topic_share_0','mean_valence','sd_valence'],
+      topic:['topic_id','topic_label','n_chunks','share','mean_valence','sd_valence']}[S.exportFile];
+    let previewRows;
+    if(S.exportFile==='combined'){
+      previewRows = D.videos[0].chunks.slice(0,7).map(c=>[D.videos[0].url.split('/')[1],String(c.i),c.t0.toFixed(1),String(c.topic),T[c.topic].label,c.s.toFixed(3)]);
+    } else if(S.exportFile==='video'){
+      previewRows = D.videos.slice(0,7).map(v=>[v.url.split('/')[1],v.dur.toFixed(1),String(v.n),(v.mix[0].share).toFixed(3),v.val.toFixed(3),'0.512']);
+    } else {
+      previewRows = sorted.slice(0,7).map(t=>[String(t.idx),t.label,String(t.n),t.prev.toFixed(3),t.mean.toFixed(3),t.sd.toFixed(3)]);
+    }
+    const previewTable = h('div',{style:{minWidth:'100%',fontFamily:'IBM Plex Mono, monospace',fontSize:'12px'}},[
+      h('div',{key:'h',style:{display:'flex',background:'var(--sunk)',borderBottom:'1px solid var(--line)',color:'var(--ink3)'}},
+        previewCols.map((c,i)=>h('div',{key:i,style:{padding:'9px 14px',minWidth:'120px',flex:'1 0 auto',whiteSpace:'nowrap'}},c))),
+      h('div',{key:'b'},previewRows.map((r,ri)=>h('div',{key:ri,style:{display:'flex',borderBottom:'1px solid var(--line)'}},
+        r.map((c,ci)=>h('div',{key:ci,style:{padding:'8px 14px',minWidth:'120px',flex:'1 0 auto',whiteSpace:'nowrap',color:ci===0?'var(--ink)':'var(--ink2)'}},c)))))]);
+    const dims={combined:D.all.toLocaleString()+' rows × 10 cols',video:'11 rows × 20 cols',topic:'13 rows × 8 cols'}[S.exportFile];
+    const exportMeta=[{k:'run',v:'2026-09-10 14:02'},{k:'chunk size',v:S.chunk+' s'},{k:'embeddings',v:S.embed},{k:'sentiment',v:S.sent},{k:'encoding',v:'UTF-8 · comma'}];
+
+    // foundations
+    const paletteTopics = D.topics.map(t=>({label:t.label,hex:t.color,swatch:this.swatch(t,22)}));
+    const sentScale = h('div',{},[
+      h('div',{key:'b',style:{display:'flex',height:'30px',borderRadius:'3px',overflow:'hidden'}},
+        ['#B4402F','#CB7462','#A29C91','#4F9B90','#14746F'].map((c,i)=>h('div',{key:i,style:{flex:1,background:c}}))),
+      h('div',{key:'l',style:{display:'flex',justifyContent:'space-between',marginTop:'6px',font:'400 11px "IBM Plex Mono", monospace',color:'var(--ink3)'}},
+        [h('span',{key:'a'},'−1.0'),h('span',{key:'b'},'0'),h('span',{key:'c'},'+1.0')])]);
+    const sentStops=[{color:'#B4402F',val:'≤ −0.60',label:'Strongly negative'},{color:'#CB7462',val:'−0.30',label:'Negative'},
+      {color:'#A29C91',val:'±0.08',label:'Neutral / procedural'},{color:'#4F9B90',val:'+0.30',label:'Positive'},
+      {color:'#14746F',val:'≥ +0.60',label:'Strongly positive'}];
+    const flows=[
+      {kicker:'FLOW A',title:'The evidence loop — statistic to watchable moment',
+       note:'Every number in the app is one click from the seconds of video that produced it. This is the path researchers take when a finding needs checking before it goes in a paper.',
+       steps:[{n:'01',title:'Paste URLs',note:'14 lines, mixed URL forms',go:this.go('run'),arrow:'→'},
+         {n:'02',title:'Run progress',note:'Stages + per-URL status',go:this.go('prog'),arrow:'→'},
+         {n:'03',title:'Batch overview',note:'11 analyzed, 3 skipped, named',go:this.go('batch'),arrow:'→'},
+         {n:'04',title:'Topics',note:'Excerpt quote cards per topic',go:this.goTopic('T02'),arrow:'→'},
+         {n:'05',title:'Video at t',note:'Player cued; cursor on the throughline',go:this.goVideo('v03',420),arrow:''}]},
+      {kicker:'FLOW B',title:'Single video — skip the batch ceremony',
+       note:'When n = 1 the batch views add nothing, so the run lands directly on the video page. Topics and Export stay reachable, scoped to that one transcript.',
+       steps:[{n:'01',title:'One URL',note:'Paste, hit Run',go:this.go('run'),arrow:'→'},
+         {n:'02',title:'Progress',note:'Same stages, ~40 s',go:this.go('prog'),arrow:'→'},
+         {n:'03',title:'Video page',note:'Lands here, no overview stop',go:this.goVideo('v04',0),arrow:'→'},
+         {n:'04',title:'Export',note:'Chunk CSV for that video',go:this.go('export'),arrow:''}]}
+    ];
+    const states=[
+      {kicker:'EMPTY · FRESH LAUNCH',color:'var(--ink3)',title:'Nothing run yet',body:'Results views stay reachable and explain what they will contain, so the shape of the output is legible before an hour of GPU time is spent.',cta:'Start a run',
+        visual:h('div',{style:{height:'26px',borderRadius:'3px',background:'repeating-linear-gradient(45deg,var(--line) 0 5px,transparent 5px 10px)'}})},
+      {kicker:'LOADING · MODEL DOWNLOAD',color:'var(--ink)',title:'Fetching models, 74%',body:'First run pulls 592 MB of weights. Stage, size and throughput — never a bare spinner, and never a blocking modal.',cta:'View run log',
+        visual:h('div',{style:{height:'7px',borderRadius:'3px',background:'var(--sunk)',overflow:'hidden'}},
+          h('div',{style:{height:'100%',width:'74%',background:'var(--ink)',backgroundImage:'repeating-linear-gradient(90deg,rgba(255,255,255,.35) 0 6px,transparent 6px 14px)',animation:'tlbar 1.1s linear infinite'}}))},
+      {kicker:'PARTIAL FAILURE',color:'var(--neg)',title:'3 of 14 skipped',body:'The batch finishes and says which URLs it could not read, in plain language, with the retry that would fix each one.',cta:'See skipped URLs',
+        visual:h('div',{style:{display:'flex',gap:'4px'}},[0,1,2,3,4,5,6,7,8,9,10,11,12,13].map(i=>h('div',{key:i,style:{flex:1,height:'26px',borderRadius:'2px',background:i>10?'var(--neg)':'var(--line)',opacity:i>10?.75:1}})))}
+    ];
+
+    return {
+      mark, nav, crumbs, runTag:'run 14:02 · session only',
+      themeLabel:S.theme==='light'?'Light':'Dark', themeDot:S.theme==='light'?'transparent':'var(--ink2)', toggleTheme:this.toggleTheme,
+      isRun:screen==='run', isProg:screen==='prog', isBatch:screen==='batch', isTopics:screen==='topics',
+      isSent:screen==='tsent', isVideo:screen==='video', isExport:screen==='export', isFound:screen==='found',
+      urlText:S.urlText||this.DEFAULT_URLS, onUrls:e=>this.setState({urlText:e.target.value}),
+      urlCount:urls.length+' URLs · '+urls.length+' unique',
+      advOpen:S.adv, toggleAdv:()=>this.setState(s=>({adv:!s.adv})), advIcon:S.adv?'▲':'▼',
+      advSummary:S.chunk+' s chunks · '+S.embed+' · '+S.sent+(S.whisper?' · Whisper on':''),
+      chunkOpts, chunkLabel:S.chunk+' s ≈ '+Math.round(S.chunk*2.6)+' words', modelPickers,
+      toggleWhisper:()=>this.setState(s=>({whisper:!s.whisper})),
+      whisperSwitch:'flex:none;width:42px;height:24px;border-radius:12px;border:1px solid '+(S.whisper?'var(--ink)':'var(--line2)')+';background:'+(S.whisper?'var(--ink)':'var(--surface)')+';padding:2px;display:flex;justify-content:'+(S.whisper?'flex-end':'flex-start')+';cursor:pointer',
+      whisperKnob:'display:block;width:18px;height:18px;border-radius:50%;background:'+(S.whisper?'var(--paper)':'var(--line2)'),
+      runSummary, startRun:this.go('prog'), goExport:this.go('export'),
+      stageList, urlStatus,
+      batchStats, batchHist, batchChunks:D.all.toLocaleString(), batchSentStats, skips, batchVideos:D.videos.map(vRow),
+      topicCards, shareBar, shareLegend, outlierPct:(D.outlier*100).toFixed(1)+'%',
+      topicLabel:topic.label, quotes,
+      sortOpts, divergingChart, sentTable, heatmap,
+      videoId:video.id, videoTitle:video.t, videoChannel:video.ch, singleRun:false, player, throughlineFull, videoLegend,
+      videoMeta, videoMix, videoMixBar:this.stackBar(video.mix,18,3), videoSentBars, entities, transcript,
+      clock:this.fmtT(S.t)+' / '+this.fmtT(video.dur), playIcon:S.playing?'❚❚':'▶', togglePlay:()=>this.setState(s=>({playing:!s.playing})),
+      exportFiles, exportMeta, exportName:files.find(f=>f.k===S.exportFile).file, schema, schemaDims:dims, previewTable,
+      demoFull:this.throughline(D.videos[0],'full',{key:'demo'}), demoMed:this.throughline(D.videos[7],'med',{key:'demo'}),
+      demoMicros:h('div',{style:{display:'flex',flexDirection:'column',gap:'10px'}},
+        D.videos.slice(2,6).map(v=>h('div',{key:v.id,style:{display:'grid',gridTemplateColumns:'minmax(0,1fr) 150px',gap:'12px',alignItems:'center'}},[
+          h('span',{key:'t',style:{fontSize:'12.5px',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',color:'var(--ink2)'}},v.t),
+          h('span',{key:'m'},this.throughline(v,'micro',{key:'demo'}))]))),
+      paletteTopics, sentScale, sentStops, flows, states
+    };
+  }
+}
+</script>
+</body>
+</html>

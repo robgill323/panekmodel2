@@ -1,0 +1,59 @@
+project:
+  name: panekmodel2
+  type: web-app
+  description: YouTube transcript ingestion, BERTopic topic modeling, and transformer sentiment pipeline with CLI and Streamlit UI
+stack:
+  language: Python
+methodology:
+  autonomy: guided
+  phases:
+    exploration:
+      enabled: true
+    definition:
+      enabled: true
+    design:
+      enabled: true
+    implementation:
+      enabled: true
+      parallel_devs: 2
+    delivery:
+      enabled: true
+  quality:
+    require_tests: true
+    require_review: true
+    require_human_approval:
+      - prd
+      - architecture
+agents:
+  orchestrator:
+    model: claude-fable-5
+    extra_rules:
+      - The orchestrator itself runs on Claude Fable 5 (the main session model).
+      - When spawning any specialist teammate or subagent, always set its model to claude-opus-5 (Opus 5). Never spawn teammates on a smaller model.
+  researcher:
+    model: claude-opus-5
+  strategist:
+    model: claude-opus-5
+  architect:
+    model: claude-opus-5
+  developer:
+    model: claude-opus-5
+  reviewer:
+    model: claude-opus-5
+  ideator:
+    model: claude-opus-5
+  devops:
+    model: claude-opus-5
+  security:
+    model: claude-opus-5
+replay:
+  # This is a Python project; the built-in allow-list defaults to npm commands,
+  # which would refuse every test command a story here could name.
+  allowed_commands:
+    - .venv/bin/python -m pytest
+    - python -m pytest
+    - pytest
+  timeout_seconds: 600
+output:
+  artifacts_dir: ./artifacts
+  code_dir: ./src

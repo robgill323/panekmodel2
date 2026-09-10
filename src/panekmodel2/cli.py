@@ -36,6 +36,30 @@ def fetch(url_or_id: str, outfile: Path = typer.Option(Path("transcript.json")))
 
 
 @app.command()
+def ui(
+    host: str = typer.Option("127.0.0.1", help="Interface to bind. Defaults to localhost only."),
+    port: int = typer.Option(8000, help="Port to serve on."),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the UI in a browser."),
+):
+    """Serve the Throughline web UI (and its API) on this machine."""
+    from .server import serve  # noqa: PLC0415
+
+    url = f"http://{host}:{port}/"
+    console.print(f"[bold]Throughline[/bold] → {url}")
+    if host not in ("127.0.0.1", "localhost"):
+        console.print(
+            "[yellow]Warning: binding a non-loopback interface exposes this "
+            "unauthenticated UI to your network.[/yellow]"
+        )
+    if open_browser:
+        import threading  # noqa: PLC0415
+        import webbrowser  # noqa: PLC0415
+
+        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+    serve(host=host, port=port)
+
+
+@app.command()
 def run(
     urls: List[str] = typer.Argument(..., help="One or more YouTube URLs or video IDs"),
     whisper: bool = typer.Option(False, help="Enable Whisper fallback"),

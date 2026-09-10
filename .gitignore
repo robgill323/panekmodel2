@@ -1,4 +1,5 @@
 __pycache__/
+.pytest_cache/
 *.pyc
 .venv/
 .env
@@ -7,3 +8,10 @@ __pycache__/
 build/
 dist/
 .streamlit/
+# Claude Code local settings
+.claude/settings.local.json
+
+# bmad-swarm (generated files)
+.claude/settings.local.json
+.session-active
+*.bak

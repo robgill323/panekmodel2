@@ -9,7 +9,7 @@ dependencies = [
   "rich>=13.7.0",
   "pydantic>=2.6.0",
   "pydantic-settings>=2.6.0",
-  "youtube-transcript-api>=0.6.2",
+  "youtube-transcript-api>=1.0.0",
   "google-api-python-client>=2.154.0",
   "google-auth-oauthlib>=1.2.0",
   "pytube>=15.0.0",
@@ -25,13 +25,21 @@ dependencies = [
   "transformers>=4.39.0",
   "tqdm>=4.66.0",
   "nltk>=3.8.1",
-  "matplotlib>=3.8.0",
   "srt>=3.5.0",
   "yt-dlp>=2024.11.4",
   "streamlit>=1.40.0",
+  "plotly>=5.18.0",
+  "fastapi>=0.110.0",
+  "uvicorn>=0.27.0",
 ]
 readme = "README.md"
 license = { text = "MIT" }
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "httpx>=0.27.0",
+]
 
 [project.urls]
 Homepage = "https://example.com"
@@ -48,3 +56,13 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"panekmodel2.server" = ["static/*", "static/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+  "slow: exercises real model weights; deselected by default with -m 'not slow'",
+]

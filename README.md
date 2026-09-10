@@ -11,6 +11,30 @@ pip install -e .
 python -m nltk.downloader stopwords
 ```
 
+### Throughline — the web UI
+
+The primary interface. Paste a batch of URLs, watch per-stage progress, and
+explore topics, sentiment and the per-video Throughline:
+
+```bash
+panekmodel2 ui              # serves http://127.0.0.1:8000 and opens a browser
+panekmodel2 ui --port 9000 --no-open
+```
+
+The server binds `127.0.0.1` by default. It has no authentication and runs
+unbounded compute on request, so do not bind a public interface.
+
+Results are session-scoped: they live in the server process and are discarded
+when it stops. Export before quitting.
+
+An earlier Streamlit UI remains available as an interim tool:
+
+```bash
+streamlit run src/panekmodel2/ui_app.py
+```
+
+### Command line
+
 Run the full pipeline on a YouTube URL or ID:
 
 ```bash
@@ -32,7 +56,8 @@ Environment variables (or .env) via pydantic BaseSettings:
 - `YOUTUBE_API_KEY` or `GOOGLE_CREDENTIALS_FILE` for official captions (OAuth).
 - `WHISPER_MODEL` (e.g., `small`, `base`, `medium`, `large-v3`) if using ASR fallback.
 - `EMBEDDING_MODEL` for BERTopic (default `all-mpnet-base-v2`).
-- `CHUNK_MAX_WORDS` (default 400) and `CHUNK_MAX_SECONDS` (default 90).
+- `CHUNK_MAX_WORDS` (default 200) and `CHUNK_MAX_SECONDS` (default 60).
+- `SENTIMENT_MODEL` (default `siebert/sentiment-roberta-large-english`).
 
 ## Notes
 
@@ -42,8 +67,31 @@ Environment variables (or .env) via pydantic BaseSettings:
 
 ## CLI commands
 
+- `panekmodel2 ui`: serve the Throughline web UI and its API on localhost.
 - `panekmodel2 run <video_url_or_id>`: run ingestion → topics → sentiment and print a report.
 - `panekmodel2 fetch <video_url_or_id>`: fetch transcript only and save as JSON.
+
+## Sentiment scale
+
+Every sentiment number in the app, the API and the CSV exports is a *valence*
+in −1 … +1, produced by the single conversion in `sentiment.py`
+(`normalize_sentiment`). A `neutral` label maps to exactly `0.0` regardless of
+model confidence, and a label the project cannot interpret raises rather than
+being silently treated as neutral.
+
+The default model (`siebert/sentiment-roberta-large-english`) is **binary** —
+it never emits a neutral class, so no chunk is ever scored neutral and values
+near zero mean low confidence, not neutrality. The UI states this wherever it
+shows a neutral band. Choose a three-way model such as
+`cardiffnlp/twitter-roberta-base-sentiment-latest` if you need one.
+
+## Tests
+
+```bash
+pip install -e '.[dev]'
+pytest                  # fast suite; model weights are stubbed
+pytest -m slow          # adds real BERTopic fits (downloads all-MiniLM-L6-v2)
+```
 
 ## Outputs
 

@@ -8,10 +8,27 @@ import streamlit as st
 
 from panekmodel2.config import Settings, get_settings
 from panekmodel2.pipeline import PipelineRunner, extract_video_id
+from panekmodel2.sentiment import normalize_sentiment
 
 st.set_page_config(page_title="PanekModel2", layout="wide")
 
 st.title("YouTube Transcript → Topics → Sentiment")
+
+
+@st.cache_resource(show_spinner="Loading models…")
+def _build_runner(settings_key: str, _settings: Settings) -> PipelineRunner:
+    return PipelineRunner(_settings)
+
+
+def get_runner(settings: Settings) -> PipelineRunner:
+    """Return a PipelineRunner cached across reruns.
+
+    Without this, every widget interaction rebuilt the runner and reloaded
+    ~1.8 GB of embedding + sentiment weights. Cached on a JSON rendering of
+    the settings, so changing a model or chunk size still builds a fresh
+    runner while repeated clicks with identical settings reuse the models.
+    """
+    return _build_runner(settings.model_dump_json(), _settings=settings)
 
 
 def fmt_ts(seconds: float) -> str:
@@ -182,7 +199,7 @@ if submitted:
         data.update(overrides)
         custom_settings = Settings(**data)
 
-        runner = PipelineRunner(custom_settings)
+        runner = get_runner(custom_settings)
         results = []
         failures = []
         try:
@@ -191,9 +208,20 @@ if submitted:
                     run_status.write(msg)
 
                 if len(urls) > 1:
-                    all_outputs, run_failures = runner.run_multi(urls, progress=_progress, detect_people=detect_people)
-                    results = list(zip(urls, all_outputs))
-                    failures.extend(run_failures)
+                    multi = runner.run_multi(urls, progress=_progress, detect_people=detect_people)
+                    all_outputs = multi.outputs
+                    # Pair each output with the URL that actually produced it.
+                    # zip(urls, outputs) would shift attribution by one for
+                    # every video after a skipped URL.
+                    _url_by_video = {
+                        oc.video_id: oc.url
+                        for oc in multi.outcomes
+                        if oc.status == "analyzed" and oc.video_id
+                    }
+                    results = [
+                        (_url_by_video.get(o.video_id, o.video_id), o) for o in all_outputs
+                    ]
+                    failures.extend(multi.failures)
                 else:
                     _progress(f"Fetching transcript: {urls[0]}")
                     outputs = runner.run(urls[0], detect_people=detect_people)
@@ -408,7 +436,7 @@ if st.session_state.get("video_choices"):
             _tid_ex = int(_tr.iloc[0]["topic"]) if not _tr.empty else -1
             _kws_ex = ", ".join(_kw_map.get(_tid_ex, []))
             _people_ex = ", ".join(outputs.people.get(_i, []))
-            _norm = _sent.score * (1 if _sent.label.lower().startswith("pos") else -1)
+            _norm = normalize_sentiment(_sent.label, _sent.score)
             _export_rows.append({
                 "video_id":          outputs.video_id,
                 "video_title":       meta.get("title", ""),
@@ -486,7 +514,7 @@ if st.session_state.get("video_choices"):
     with tabs[2]:
         import statistics as _statistics  # noqa: PLC0415
         _sent_scores = [
-            s.score * (1 if s.label.lower().startswith("pos") else -1)
+            normalize_sentiment(s.label, s.score)
             for s in outputs.sentiments
         ]
         _ts_rows = []
@@ -604,7 +632,7 @@ if st.session_state.get("video_choices"):
                 {
                     "start": c.start,
                     "mid":   (c.start + c.end) / 2,
-                    "score": s.score * (1 if s.label.lower().startswith("pos") else -1),
+                    "score": normalize_sentiment(s.label, s.score),
                     "label": s.label,
                     "text":  c.text[:120],
                 }

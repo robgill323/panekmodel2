@@ -26,6 +26,38 @@ from .transcript_fetcher import TranscriptFetcher, TranscriptSegment
 logger = logging.getLogger(__name__)
 
 
+# Bumped whenever the cached entry shape changes, so entries written by an
+# older layout are never read back into the new one.  v2 unified the shapes
+# written by run() and run_multi(), which previously differed by the
+# ``video_id`` key and blew up run_multi with a KeyError on a mixed cache.
+CACHE_VERSION = 2
+
+# Keys every cache entry must carry.  A stored entry missing any of these is
+# treated as stale rather than trusted.
+CACHE_ENTRY_KEYS = frozenset(
+    {"video_id", "metadata", "segments", "chunks", "embeddings", "sentiments"}
+)
+
+
+def build_cache_entry(
+    video_id: str,
+    metadata: Dict[str, str],
+    segments: List[TranscriptSegment],
+    chunks: List[Chunk],
+    embeddings,
+    sentiments: List[SentimentResult],
+) -> dict:
+    """Build the one cache-entry shape both run() and run_multi() use."""
+    return {
+        "video_id": video_id,
+        "metadata": metadata,
+        "segments": segments,
+        "chunks": chunks,
+        "embeddings": embeddings,
+        "sentiments": sentiments,
+    }
+
+
 class VideoCache:
     """Disk cache for per-video transcript, embeddings, and sentiment.
 
@@ -46,14 +78,26 @@ class VideoCache:
         return self.cache_dir / f"{video_id}_{key}.pkl"
 
     def load(self, video_id: str, key: str) -> dict | None:
+        """Return a cached entry, or None if it is missing, corrupt or stale.
+
+        An entry that does not carry the full :data:`CACHE_ENTRY_KEYS` set was
+        written by an older layout; it is discarded rather than handed to a
+        caller that would then fail on a missing key.
+        """
         p = self._path(video_id, key)
-        if p.exists():
-            try:
-                with open(p, "rb") as fh:
-                    return pickle.load(fh)
-            except Exception:
-                p.unlink(missing_ok=True)
-        return None
+        if not p.exists():
+            return None
+        try:
+            with open(p, "rb") as fh:
+                entry = pickle.load(fh)
+        except Exception:  # noqa: BLE001
+            p.unlink(missing_ok=True)
+            return None
+        if not isinstance(entry, dict) or not CACHE_ENTRY_KEYS.issubset(entry):
+            logger.info("%s: discarding cache entry written by an older layout", video_id)
+            p.unlink(missing_ok=True)
+            return None
+        return entry
 
     def save(self, video_id: str, key: str, data: dict) -> None:
         p = self._path(video_id, key)
@@ -67,8 +111,70 @@ class VideoCache:
         embedding_model: str,
         sentiment_model: str,
     ) -> str:
-        raw = f"{chunk_max_words}|{chunk_max_seconds}|{embedding_model}|{sentiment_model}"
+        raw = (
+            f"v{CACHE_VERSION}|{chunk_max_words}|{chunk_max_seconds}"
+            f"|{embedding_model}|{sentiment_model}"
+        )
         return hashlib.md5(raw.encode()).hexdigest()[:10]
+
+
+@dataclass
+class URLOutcome:
+    """What happened to one submitted URL.
+
+    ``video_id`` is None when the URL could not even be parsed.  ``reason`` is
+    plain language meant for a researcher, not an exception repr.
+    """
+
+    url: str
+    video_id: Optional[str]
+    status: str  # "analyzed" | "skipped"
+    error: Optional[BaseException] = None
+
+    @property
+    def reason(self) -> str:
+        if self.status == "analyzed":
+            return ""
+        return describe_failure(self.error)
+
+
+@dataclass
+class MultiRunResult:
+    """Result of :meth:`PipelineRunner.run_multi`.
+
+    Unpacks as ``(outputs, failures)`` so callers written against the older
+    two-tuple keep working, while ``outcomes`` carries the per-URL record that
+    makes positional URL↔output pairing unnecessary.
+    """
+
+    outputs: List["PipelineOutputs"]
+    failures: List[tuple[str, BaseException]]
+    outcomes: List[URLOutcome]
+
+    def __iter__(self):
+        return iter((self.outputs, self.failures))
+
+    def outputs_by_video_id(self) -> Dict[str, "PipelineOutputs"]:
+        return {o.video_id: o for o in self.outputs}
+
+
+def describe_failure(exc: BaseException | None) -> str:
+    """Turn a pipeline exception into a plain-language skip reason."""
+    if exc is None:
+        return ""
+    text = str(exc)
+    low = text.lower()
+    if isinstance(exc, ValueError) and "could not extract video id" in low:
+        return "Not a recognizable YouTube URL or video ID."
+    if "transcripts are disabled" in low:
+        return "The uploader disabled transcripts for this video."
+    if "no transcript" in low or "no usable transcript" in low:
+        return "No caption track available. Whisper audio fallback would recover most of these."
+    if "produced no chunks" in low:
+        return "Captions came back empty, so there was nothing to analyze."
+    if "unavailable" in low or "private" in low or "removed" in low:
+        return "The video was unavailable when we fetched it — deleted, private, or region-locked."
+    return text
 
 
 @dataclass
@@ -224,31 +330,15 @@ class PipelineRunner:
             self.settings.embedding_model,
             self.settings.sentiment_model,
         )
-        cached = cache.load(video_id, cache_key)
-        if cached:
+        entry = cache.load(video_id, cache_key)
+        if entry:
             logger.info("%s: loaded transcript + embeddings + sentiments from cache", video_id)
-            metadata = cached["metadata"]
-            segments = cached["segments"]
-            chunks   = cached["chunks"]
-            embeddings = cached["embeddings"]
-            sentiments = cached["sentiments"]
         else:
-            metadata = self.fetch_metadata(video_id)
-            segments = self.fetcher.fetch(video_id)
-            chunks = chunk_segments(
-                segments,
-                max_words=self.settings.chunk_max_words,
-                max_seconds=self.settings.chunk_max_seconds,
-            )
-            embeddings = self.topic_modeler.embed_chunks(chunks)
-            sentiments = self.sentiment_analyzer.analyze(chunks)
-            cache.save(video_id, cache_key, {
-                "metadata": metadata,
-                "segments": segments,
-                "chunks": chunks,
-                "embeddings": embeddings,
-                "sentiments": sentiments,
-            })
+            entry = self._prepare_video(video_id, cache, cache_key)
+
+        chunks = entry["chunks"]
+        embeddings = entry["embeddings"]
+        sentiments = entry["sentiments"]
 
         topic_model, topics, probs = self.topic_modeler.fit(chunks, embeddings=embeddings)
         topics_df = self.topic_modeler.topic_dataframe(chunks, topics, probs)
@@ -257,9 +347,9 @@ class PipelineRunner:
         people = self._detect_people(chunks) if detect_people else {}
 
         return PipelineOutputs(
-            video_id=video_id,
-            metadata=metadata,
-            segments=segments,
+            video_id=entry["video_id"],
+            metadata=entry["metadata"],
+            segments=entry["segments"],
             chunks=chunks,
             topics_df=topics_df,
             sentiments=sentiments,
@@ -267,17 +357,60 @@ class PipelineRunner:
             people=people,
         )
 
+    def _prepare_video(
+        self,
+        video_id: str,
+        cache: VideoCache,
+        cache_key: str,
+        progress: Callable[[str], None] | None = None,
+    ) -> dict:
+        """Fetch, chunk, embed and score one video, then cache the result.
+
+        This is the single writer of cache entries, so ``run()`` and
+        ``run_multi()`` cannot drift into incompatible shapes again.
+        """
+        def _prog(msg: str) -> None:
+            if progress:
+                progress(msg)
+
+        _prog(f"Fetching transcript: {video_id}")
+        metadata = self.fetch_metadata(video_id)
+        segments = self.fetcher.fetch(video_id)
+        chunks = chunk_segments(
+            segments,
+            max_words=self.settings.chunk_max_words,
+            max_seconds=self.settings.chunk_max_seconds,
+        )
+        if not chunks:
+            raise RuntimeError("Transcript produced no chunks (empty or unusable captions)")
+        _prog(f"{video_id}: {len(segments)} segments → {len(chunks)} chunks — embedding…")
+        embeddings = self.topic_modeler.embed_chunks(chunks)
+        _prog(f"{video_id}: running sentiment…")
+        sentiments = self.sentiment_analyzer.analyze(chunks)
+        entry = build_cache_entry(
+            video_id=video_id,
+            metadata=metadata,
+            segments=segments,
+            chunks=chunks,
+            embeddings=embeddings,
+            sentiments=sentiments,
+        )
+        cache.save(video_id, cache_key, entry)
+        return entry
+
     def run_multi(
         self,
         urls: List[str],
         progress: Callable[[str], None] | None = None,
         detect_people: bool = True,
-    ) -> tuple[List["PipelineOutputs"], List[tuple[str, Exception]]]:
+    ) -> "MultiRunResult":
         """Run pipeline across multiple videos with a single shared topic model.
 
-        Returns ``(outputs, failures)`` where ``failures`` is a list of
-        ``(url, exception)`` pairs for videos that could not be processed.
-        Successfully processed videos are always returned even when some fail.
+        Returns a :class:`MultiRunResult`. It unpacks as ``(outputs, failures)``
+        for existing callers, and additionally exposes ``.outcomes`` — one
+        record per submitted URL, in submission order, saying whether that URL
+        was analyzed or skipped and why.  Callers must never pair URLs against
+        outputs positionally: a single skipped URL shifts every video after it.
         """
         def _prog(msg: str) -> None:
             if progress:
@@ -296,49 +429,31 @@ class PipelineRunner:
         # --- fetch, chunk, embed, and score sentiment per video (cached) ---
         per_video: List[dict] = []
         failures: List[tuple[str, Exception]] = []
+        outcomes: List[URLOutcome] = []
         for url in urls:
             try:
                 video_id = extract_video_id(url)
             except Exception as exc:  # noqa: BLE001
                 _prog(f"⚠ Skipping {url!r}: {exc}")
                 failures.append((url, exc))
+                outcomes.append(URLOutcome(url=url, video_id=None, status="skipped", error=exc))
                 continue
             try:
-                cached = cache.load(video_id, cache_key)
-                if cached:
-                    _prog(f"{video_id}: loaded from cache ({len(cached['chunks'])} chunks)")
-                    per_video.append(cached)
-                    continue
-
-                _prog(f"Fetching transcript: {video_id}")
-                metadata = self.fetch_metadata(video_id)
-                segments = self.fetcher.fetch(video_id)
-                chunks = chunk_segments(
-                    segments,
-                    max_words=self.settings.chunk_max_words,
-                    max_seconds=self.settings.chunk_max_seconds,
-                )
-                _prog(f"{video_id}: {len(segments)} segments → {len(chunks)} chunks — embedding…")
-                embeddings = self.topic_modeler.embed_chunks(chunks)
-                _prog(f"{video_id}: running sentiment…")
-                sentiments = self.sentiment_analyzer.analyze(chunks)
-                entry = {
-                    "video_id": video_id,
-                    "metadata": metadata,
-                    "segments": segments,
-                    "chunks": chunks,
-                    "embeddings": embeddings,
-                    "sentiments": sentiments,
-                }
-                cache.save(video_id, cache_key, entry)
+                entry = cache.load(video_id, cache_key)
+                if entry:
+                    _prog(f"{video_id}: loaded from cache ({len(entry['chunks'])} chunks)")
+                else:
+                    entry = self._prepare_video(video_id, cache, cache_key, progress=_prog)
                 per_video.append(entry)
+                outcomes.append(URLOutcome(url=url, video_id=video_id, status="analyzed"))
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Skipping %s due to error: %s", video_id, exc)
                 _prog(f"⚠ Skipping {video_id}: {exc}")
                 failures.append((url, exc))
+                outcomes.append(URLOutcome(url=url, video_id=video_id, status="skipped", error=exc))
 
         if not per_video:
-            return [], failures
+            return MultiRunResult(outputs=[], failures=failures, outcomes=outcomes)
 
         # --- combine all chunks + embeddings and fit ONE shared topic model ---
         all_chunks: List[Chunk] = []
@@ -370,6 +485,10 @@ class PipelineRunner:
         for v, (s, e) in zip(per_video, slices):
             v_chunks = all_chunks[s:e]
             v_topics_df = topics_df_combined.iloc[s:e].reset_index(drop=True)
+            # topic_dataframe() numbered chunks across the whole batch; rebase
+            # to this video's own 0-based indices so chunk_index lines up with
+            # PipelineOutputs.chunks / .sentiments, as it does for run().
+            v_topics_df["chunk_index"] = range(len(v_topics_df))
             v_sentiments = sentiments_combined[s:e]
             v_rollup = self.sentiment_analyzer.aggregate(v_sentiments)
             # Re-index people dict to per-video chunk indices (0-based)
@@ -391,7 +510,7 @@ class PipelineRunner:
                 )
             )
         _prog("Done.")
-        return outputs, failures
+        return MultiRunResult(outputs=outputs, failures=failures, outcomes=outcomes)
 
     # Tokens that carry no semantic meaning and should never appear in topic
     # keyword lists.  Includes SentencePiece underscore artifacts, transcript
@@ -419,6 +538,18 @@ class PipelineRunner:
                 and kw not in noise
             )
         ][:top_n]
+
+    def topic_keywords(self, top_n: int = 10) -> Dict[int, List[str]]:
+        """Cleaned keyword lists for every topic in the fitted shared model."""
+        model = self.topic_modeler.model
+        if model is None:
+            return {}
+        extra = frozenset(self.topic_modeler.extra_stop_words)
+        return {
+            int(tid): self._clean_kws(model.get_topic(tid) or [], top_n, extra_noise=extra)
+            for tid in model.get_topics()
+            if tid != -1
+        }
 
     def summarize_topics(self, outputs: PipelineOutputs, top_n: int = 5) -> List[dict]:
         summary = []

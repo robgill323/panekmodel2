@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Throughline — transcript topic analysis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- Webfonts are a progressive enhancement: the stacks in styles.css fall back
+     to Georgia / system-ui / ui-monospace when this request fails offline. -->
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 22 22" width="22" height="22" aria-hidden="true">
+        <rect x="0" y="2" width="9" height="5" rx="1" fill="#4477AA"></rect>
+        <rect x="9.6" y="2" width="5" height="5" rx="1" fill="#CC6677"></rect>
+        <rect x="15.2" y="2" width="6.8" height="5" rx="1" fill="#117733"></rect>
+        <path d="M0,15 C4,15 4,10.5 8,10.5 C12,10.5 12,19 16,19 C19,19 20,15 22,15" fill="none" stroke="var(--ink)" stroke-width="1.6"></path>
+      </svg>
+      <div>
+        <div class="brand-name">Throughline</div>
+        <div class="brand-sub">TRANSCRIPT TOPIC ANALYSIS</div>
+      </div>
+    </div>
+    <nav id="nav" class="nav"></nav>
+    <div id="session-card" class="session-card"></div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div id="crumbs" class="crumbs"></div>
+      <div class="topbar-right">
+        <div id="run-tag" class="run-tag"><span class="dot"></span><span>no run yet</span></div>
+        <button id="theme-toggle" class="btn-theme" type="button">
+          <span class="theme-dot"></span><span id="theme-label">Light</span>
+        </button>
+      </div>
+    </header>
+    <div id="screen" class="screen"></div>
+  </main>
+</div>
+<div id="tooltip" class="tl-tooltip" hidden></div>
+<script src="./app.js"></script>
+</body>
+</html>
