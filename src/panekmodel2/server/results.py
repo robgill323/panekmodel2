@@ -72,6 +72,33 @@ def valence_histogram(values: Sequence[float], bins: int = 11) -> List[dict]:
     return [{"value": round(-1 + i * step, 2), "count": c} for i, c in enumerate(counts)]
 
 
+EXCERPT_COUNT = 6
+
+
+def representative_excerpts(pool: Sequence[dict], limit: int = EXCERPT_COUNT) -> List[dict]:
+    """Quotes that best *typify* a topic: highest assignment probability.
+
+    Chunks moved out of the outlier bin carry no usable probability, so they
+    rank last rather than being scored on a stale number. They are still
+    eligible — a topic built entirely from reassigned chunks would otherwise
+    show no excerpts at all — but a genuinely-clustered chunk always wins.
+    """
+    ranked = sorted(
+        pool,
+        key=lambda e: (
+            e["topic_reassigned"] or e["topic_prob"] is None,
+            -(e["topic_prob"] or 0.0),
+            e["start"],
+        ),
+    )
+    return ranked[:limit]
+
+
+def polarized_excerpts(pool: Sequence[dict], limit: int = EXCERPT_COUNT) -> List[dict]:
+    """Quotes with the strongest feeling either way — not the most typical."""
+    return sorted(pool, key=lambda e: (-abs(e["valence"]), e["start"]))[:limit]
+
+
 def _entities(outputs: PipelineOutputs, limit: int = 12) -> List[dict]:
     counts: Dict[str, int] = {}
     for names in outputs.people.values():
@@ -85,12 +112,17 @@ def _video_chunks(outputs: PipelineOutputs) -> List[dict]:
     """Per-chunk records, joined to topic assignment by chunk_index."""
     topic_by_index: Dict[int, tuple] = {}
     if not outputs.topics_df.empty:
+        has_reassigned = "reassigned" in outputs.topics_df.columns
         for row in outputs.topics_df.itertuples():
-            topic_by_index[int(row.chunk_index)] = (int(row.topic), float(row.prob or 0.0))
+            topic_by_index[int(row.chunk_index)] = (
+                int(row.topic),
+                float(row.prob or 0.0),
+                bool(getattr(row, "reassigned", False)) if has_reassigned else False,
+            )
 
     chunks = []
     for i, (chunk, sent) in enumerate(zip(outputs.chunks, outputs.sentiments)):
-        topic_id, prob = topic_by_index.get(i, (-1, 0.0))
+        topic_id, prob, reassigned = topic_by_index.get(i, (-1, 0.0, False))
         valence = normalize_sentiment(sent.label, sent.score)
         chunks.append(
             {
@@ -99,7 +131,11 @@ def _video_chunks(outputs: PipelineOutputs) -> List[dict]:
                 "end": round(float(chunk.end), 2),
                 "text": chunk.text,
                 "topic_id": topic_id,
-                "topic_prob": round(prob, 4),
+                # A reassigned chunk's stored probability describes the topic it
+                # was moved OUT of, so it is not a confidence in the topic it
+                # now carries. Report it as null rather than as a number.
+                "topic_prob": None if reassigned else round(prob, 4),
+                "topic_reassigned": reassigned,
                 "valence": round(valence, 4),
                 "sentiment_label": sent.label,
                 "sentiment_score": round(float(sent.score), 4),
@@ -176,17 +212,16 @@ def build_results(
 
         for c in chunks:
             excerpt_pool.setdefault(c["topic_id"], []).append(
-                (
-                    abs(c["valence"]),
-                    {
-                        "text": c["text"][:400],
-                        "video_id": out.video_id,
-                        "video_title": video["title"],
-                        "channel": video["channel"],
-                        "start": c["start"],
-                        "valence": c["valence"],
-                    },
-                )
+                {
+                    "text": c["text"][:400],
+                    "video_id": out.video_id,
+                    "video_title": video["title"],
+                    "channel": video["channel"],
+                    "start": c["start"],
+                    "valence": c["valence"],
+                    "topic_prob": c["topic_prob"],
+                    "topic_reassigned": c["topic_reassigned"],
+                }
             )
 
     total_chunks = sum(v["n_chunks"] for v in videos) or 1
@@ -202,7 +237,7 @@ def build_results(
         vals = topic_acc[tid]["valences"]
         sd = _sd(vals)
         kws = keywords.get(tid, [])
-        pool = sorted(excerpt_pool.get(tid, []), key=lambda p: -p[0])[:6]
+        pool = excerpt_pool.get(tid, [])
         topics.append(
             {
                 "topic_id": tid,
@@ -215,7 +250,8 @@ def build_results(
                 "mean_valence": round(_mean(vals), 4),
                 "sd_valence": round(sd, 4),
                 "controversy": _controversy(sd),
-                "excerpts": [e for _, e in pool],
+                "excerpts": representative_excerpts(pool),
+                "excerpts_polarized": polarized_excerpts(pool),
             }
         )
 
@@ -225,6 +261,7 @@ def build_results(
         "n_chunks": len(outlier_vals),
         "share": len(outlier_vals) / total_chunks,
         "mean_valence": round(_mean(outlier_vals), 4),
+        "n_videos": len(topic_acc.get(-1, {}).get("videos", ())),
     }
 
     skipped = [

@@ -315,3 +315,61 @@ def test_export_filename_stamps_the_settings(results):
 def test_build_rows_rejects_unknown_kind(results):
     with pytest.raises(ValueError):
         exports.build_rows(results, "nope")
+
+
+# ── assignment confidence (design addendum §1, §3) ──────────────────
+def test_chunks_carry_assignment_confidence(results):
+    chunks = results["videos"][0]["chunks"]
+    clustered = [c for c in chunks if not c["topic_reassigned"]]
+    assert clustered, "fixture should produce normally-clustered chunks"
+    assert all(0.0 <= c["topic_prob"] <= 1.0 for c in clustered)
+
+
+def test_reassigned_chunks_report_no_probability(results):
+    """A chunk moved out of the outlier bin has no confidence for its new topic."""
+    reassigned = [c for v in results["videos"] for c in v["chunks"] if c["topic_reassigned"]]
+    assert reassigned, "fixture should produce reassigned chunks"
+    assert all(c["topic_prob"] is None for c in reassigned)
+
+
+def test_representative_excerpts_lead_with_the_most_probable(results):
+    topic = next(t for t in results["topics"] if t["topic_id"] == 0)
+    probs = [e["topic_prob"] for e in topic["excerpts"] if e["topic_prob"] is not None]
+    assert probs == sorted(probs, reverse=True)
+    assert topic["excerpts"][0]["topic_prob"] == pytest.approx(0.95)
+
+
+def test_polarized_excerpts_are_offered_separately(results):
+    topic = results["topics"][0]
+    assert topic["excerpts_polarized"]
+    strengths = [abs(e["valence"]) for e in topic["excerpts_polarized"]]
+    assert strengths == sorted(strengths, reverse=True)
+
+
+def test_outlier_bin_reports_video_coverage(results):
+    assert "n_videos" in results["outlier"]
+
+
+def test_combined_export_marks_reassignment(results):
+    rows = exports.build_rows(results, "combined")
+    reassigned = [r for r in rows if r["topic_reassigned"] == 1]
+    assert reassigned
+    assert all(r["topic_prob"] == "" for r in reassigned)
+    assert all(r["topic_prob"] != "" for r in rows if r["topic_reassigned"] == 0)
+
+
+# ── chunk size in seconds governs chunking (design addendum) ────────
+def test_chunk_seconds_drives_a_matching_word_cap(client):
+    job_id = start(client, [URL_A], chunk_max_seconds=120)
+    wait_for(client, job_id)
+    settings = client.get(f"/api/runs/{job_id}/results").json()["settings"]
+    assert settings["chunk_max_seconds"] == 120
+    # A fixed 200-word cap would have ended a "120 s" chunk around 75 s.
+    assert settings["chunk_max_words"] > 200
+
+
+def test_explicit_word_cap_is_respected(client):
+    job_id = start(client, [URL_A], chunk_max_seconds=120, chunk_max_words=90)
+    wait_for(client, job_id)
+    settings = client.get(f"/api/runs/{job_id}/results").json()["settings"]
+    assert settings["chunk_max_words"] == 90

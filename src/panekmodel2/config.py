@@ -27,8 +27,14 @@ class Settings(BaseSettings):
     chunk_max_seconds: int = Field(default=60, description="Maximum seconds per chunk before splitting.")
     topic_reduce_to: int = Field(default=10, description="Reduce topics to roughly this count for display.")
     sentiment_model: str = Field(
-        default="siebert/sentiment-roberta-large-english",
-        description="HF model for sentiment-analysis pipeline.",
+        default="cardiffnlp/twitter-roberta-base-sentiment-latest",
+        description=(
+            "HF model for sentiment-analysis pipeline. The default is 3-class "
+            "(positive/neutral/negative) and tuned on speech-like text, so a "
+            "procedural passage can actually be scored neutral. "
+            "siebert/sentiment-roberta-large-english is binary — it has no "
+            "neutral class at all."
+        ),
     )
     sentiment_batch_size: int = Field(default=16, description="Batch size for sentiment inference.")
     cuda: bool = Field(default=False, description="Force CUDA usage when available.")

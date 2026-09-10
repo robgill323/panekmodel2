@@ -1,7 +1,25 @@
+import math
 from dataclasses import dataclass
 from typing import List, Sequence
 
 from .transcript_fetcher import TranscriptSegment
+
+# Conversational speech runs around 2.6 words/second, the rate the UI quotes
+# when it says "30 s ≈ 78 words".
+WORDS_PER_SECOND = 2.6
+
+
+def words_for_seconds(seconds: int) -> int:
+    """Word cap to pair with a chunk length expressed in seconds.
+
+    The UI picks chunk size in seconds, but :func:`chunk_segments` splits on
+    whichever bound trips first. A fixed word cap would silently override the
+    chosen duration on longer settings — at 200 words a "120 s" chunk really
+    ends around 75 s. Scaling the cap well above normal speech rate keeps the
+    seconds setting authoritative while still capping a pathologically dense
+    segment.
+    """
+    return max(40, math.ceil(seconds * WORDS_PER_SECOND * 1.6))
 
 
 @dataclass

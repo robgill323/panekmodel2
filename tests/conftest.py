@@ -85,24 +85,42 @@ class FakeRunner(PipelineRunner):
         self.topic_modeler.embed_chunks = _embed  # type: ignore[method-assign]
 
         def _fit(chunks, embeddings=None):
-            topics = [i % 2 for i in range(len(chunks))]
-            probs = [0.9] * len(chunks)
+            # Round-robin two topics, with every third chunk an outlier that
+            # "reduce_outliers" then moves into topic 0 — so the reassigned
+            # path is exercised, along with a spread of probabilities.
+            topics, probs, reassigned = [], [], []
+            for i in range(len(chunks)):
+                if i % 3 == 2:
+                    topics.append(0)
+                    probs.append(0.0)
+                    reassigned.append(True)
+                else:
+                    topics.append(i % 2)
+                    probs.append(0.95 if i % 2 == 0 else 0.35)
+                    reassigned.append(False)
+            self.topic_modeler.reassigned = reassigned
             return object(), topics, probs
 
         self.topic_modeler.fit = _fit  # type: ignore[method-assign]
-        self.topic_modeler.topic_dataframe = lambda chunks, topics, probs: pd.DataFrame(
-            [
-                {
-                    "chunk_index": i,
-                    "topic": t,
-                    "prob": p,
-                    "start": c.start,
-                    "end": c.end,
-                    "text": c.text,
-                }
-                for i, (c, t, p) in enumerate(zip(chunks, topics, probs))
-            ]
-        )
+
+        def _topic_dataframe(chunks, topics, probs):
+            reassigned = self.topic_modeler.reassigned or [False] * len(chunks)
+            return pd.DataFrame(
+                [
+                    {
+                        "chunk_index": i,
+                        "topic": t,
+                        "prob": p,
+                        "reassigned": reassigned[i],
+                        "start": c.start,
+                        "end": c.end,
+                        "text": c.text,
+                    }
+                    for i, (c, t, p) in enumerate(zip(chunks, topics, probs))
+                ]
+            )
+
+        self.topic_modeler.topic_dataframe = _topic_dataframe  # type: ignore[method-assign]
 
         def _analyze(chunks):
             # Alternate polarity so valences are not degenerate.

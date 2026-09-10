@@ -36,6 +36,8 @@ evidence_bundle:
         - tests/test_sentiment.py
         - tests/test_server.py
         - tests/test_topic_model_small.py
+        - tests/test_excerpts.py
+        - tests/test_chunker.py
 
     - id: E-5
       kind: file-exists
@@ -73,6 +75,32 @@ evidence_bundle:
       ref: "src/panekmodel2/cli.py:39"
       # `panekmodel2 ui` — the launch entry point documented in README.md.
 
+    - id: E-15
+      kind: citation
+      ref: "src/panekmodel2/server/results.py:78"
+      # representative_excerpts — quote cards rank by topic-assignment
+      # probability, not by |sentiment| as the design mock did. Reassigned
+      # chunks rank last because their probability is stale (addendum §1).
+
+    - id: E-16
+      kind: citation
+      ref: "src/panekmodel2/topic_model.py:70"
+      # mark_reassigned — flags chunks that reduce_outliers moved out of the
+      # outlier bin, whose stored probability describes a topic they are no
+      # longer in (the topic_model.py:217 defect named in the addendum).
+
+    - id: E-17
+      kind: citation
+      ref: "src/panekmodel2/chunker.py:12"
+      # words_for_seconds — pairs the seconds-based chunk setting with a word
+      # cap that does not silently override it (addendum, chunk-size mapping).
+
+    - id: E-18
+      kind: citation
+      ref: "src/panekmodel2/config.py:29"
+      # sentiment_model default is now the 3-class cardiffnlp twitter-roberta;
+      # siebert stays selectable and is labelled binary (addendum §4).
+
     - id: E-11
       kind: fixture-provenance
       fixture: tests/conftest.py
@@ -83,7 +111,7 @@ evidence_bundle:
 
     - id: E-12
       kind: human-attested
-      claim: "Every screen was rendered in headless Chrome against a live server and inspected - New run, Batch overview, Topics, Topic sentiment (light and dark), Video page, Export. The full-size Throughline (topic lane + sentiment ribbon, time axis, plus/minus 1 markers) and the micro-throughlines in the video list draw from real chunk data; the YouTube iframe embed loads and the three CSV exports download with correct headers."
+      claim: "Every screen was rendered in headless Chrome against a live server and inspected - New run, Batch overview, Topics, Topic sentiment (light and dark), Video page, Export, and the outlier inspector. The full-size Throughline (topic lane + sentiment ribbon, time axis, plus/minus 1 markers) and the micro-throughlines in the video list draw from real chunk data; the YouTube iframe embed loads and the three CSV exports download with correct headers. After the design addendum, the Topics excerpt toggle was confirmed to reorder quote cards by assignment probability rather than by absolute sentiment, and the outlier inspector was confirmed to list every unclustered chunk with a working per-video filter and click-through to the cued video."
 
     - id: E-13
       kind: assumed
@@ -91,4 +119,21 @@ evidence_bundle:
 
     - id: E-14
       kind: assumed
-      claim: "The end-to-end path was exercised with the transcript fetch, embedding and sentiment stages stubbed. No run against live YouTube transcripts with the real siebert/mpnet weights was performed, so real-transcript topic quality and true wall-clock run times are unverified."
+      claim: "The end-to-end path was exercised with the transcript fetch, embedding and sentiment stages stubbed. No run against live YouTube transcripts with the real embedding/sentiment weights was performed, so real-transcript topic quality and true wall-clock run times are unverified."
+
+    - id: E-19
+      kind: assumed
+      claim: "HDBSCAN produced no outlier chunks on any small synthetic corpus tried, so reduce_outliers never actually fired end-to-end here. The reassignment flag logic is covered directly by unit tests over mark_reassigned(), and the slow integration test asserts only the invariants that hold either way. An observed real reassignment on a live transcript batch remains unverified."
+
+    - id: E-20
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests/test_sentiment.py -m slow -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+      # Resolves the new default model's config from the HF Hub and asserts its
+      # id2label is exactly {negative, neutral, positive} - the labels
+      # normalize_sentiment maps. Verified: no inference weights needed.
+
+    - id: E-21
+      kind: assumed
+      claim: "The default sentiment model's weights were never downloaded and no inference was run against it, so only its declared label set is verified - not its scores on real transcript text."

@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 
 from panekmodel2.chunker import Chunk
-from panekmodel2.topic_model import TopicModeler
+from panekmodel2.topic_model import TopicModeler, mark_reassigned
 
 SENTENCES = [
     "The school board approved the levy after a long budget hearing this evening.",
@@ -70,3 +70,58 @@ def test_empty_corpus_raises_before_touching_a_model():
     modeler = TopicModeler(embedding_model="definitely-not-a-model", reduce_to=0)
     with pytest.raises(ValueError, match="No chunks"):
         modeler.fit([], embeddings=None)
+
+
+def test_mark_reassigned_flags_only_chunks_moved_out_of_the_outlier_bin():
+    before = [-1, -1, 0, 1, -1]
+    after = [2, -1, 0, 1, 3]
+    assert mark_reassigned(before, after) == [True, False, False, False, True]
+
+
+def test_mark_reassigned_ignores_chunks_that_were_never_outliers():
+    """A normal chunk whose topic merely changed id is not "reassigned"."""
+    assert mark_reassigned([0, 1], [1, 0]) == [False, False]
+
+
+def test_mark_reassigned_on_an_untouched_batch():
+    assert mark_reassigned([0, 1, 2], [0, 1, 2]) == [False, False, False]
+
+
+def test_mark_reassigned_empty():
+    assert mark_reassigned([], []) == []
+
+
+@pytest.mark.slow
+def test_reassignment_flag_is_populated_and_consistent():
+    """The flag must always be per-chunk, boolean, and never mark an outlier.
+
+    Whether HDBSCAN actually produces outliers on a given corpus is not
+    something a test can force, so this asserts the invariants that must hold
+    either way; mark_reassigned() above covers the moved-chunk logic directly.
+    """
+    modeler = TopicModeler(embedding_model="all-MiniLM-L6-v2", reduce_to=0)
+    chunks = chunks_for(24)
+    embeddings = modeler.embed_chunks(chunks)
+
+    _model, topics, probs = modeler.fit(chunks, embeddings=embeddings)
+
+    assert len(modeler.reassigned) == len(chunks)
+    assert all(isinstance(flag, bool) for flag in modeler.reassigned)
+    for flag, topic in zip(modeler.reassigned, topics):
+        if flag:
+            assert int(topic) != -1, "a flagged chunk was moved OUT of the bin"
+
+    df = modeler.topic_dataframe(chunks, topics, probs)
+    assert "reassigned" in df.columns
+    assert list(df["reassigned"]) == list(modeler.reassigned)
+
+
+@pytest.mark.slow
+def test_reassigned_flag_resets_between_fits():
+    modeler = TopicModeler(embedding_model="all-MiniLM-L6-v2", reduce_to=0)
+    chunks = chunks_for(24)
+    modeler.fit(chunks, embeddings=modeler.embed_chunks(chunks))
+
+    small = chunks_for(2)
+    modeler.fit(small, embeddings=modeler.embed_chunks(small))
+    assert modeler.reassigned == [False, False]

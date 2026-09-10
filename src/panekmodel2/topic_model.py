@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -67,6 +67,17 @@ STOP_WORDS = ENGLISH_STOP_WORDS.union(_SPOKEN_STOPWORDS)
 MIN_CLUSTERABLE_CHUNKS = 3
 
 
+def mark_reassigned(before: Sequence[int], after: Sequence[int]) -> List[bool]:
+    """Flag chunks that outlier reduction moved out of the outlier bin.
+
+    ``BERTopic.reduce_outliers`` rewrites topic assignments but leaves
+    ``probabilities_`` alone, so these chunks keep a probability that describes
+    the topic they were moved OUT of. Callers use this flag to avoid reading
+    that number as a confidence in the topic the chunk now carries.
+    """
+    return [b == -1 and a != -1 for b, a in zip(before, after)]
+
+
 class TopicModeler:
     def __init__(
         self,
@@ -79,6 +90,10 @@ class TopicModeler:
         self.extra_stop_words: List[str] = [w.lower().strip() for w in (extra_stop_words or []) if w.strip()]
         self.model: BERTopic | None = None
         self._embedder: SentenceTransformer | None = None
+        # Per-chunk flag from the most recent fit: True where the chunk was
+        # moved out of the outlier bin by reduce_outliers, and its stored
+        # probability therefore refers to a topic it is no longer assigned to.
+        self.reassigned: List[bool] = []
 
     def _get_embedder(self) -> SentenceTransformer:
         """Return a cached SentenceTransformer, loading it once on first call."""
@@ -123,6 +138,7 @@ class TopicModeler:
             raise ValueError("No chunks to model topics for")
 
         logger.info("Fitting BERTopic on %d chunks", n_samples)
+        self.reassigned = [False] * n_samples
 
         if n_samples < MIN_CLUSTERABLE_CHUNKS:
             return self._fit_single_topic(texts, embeddings)
@@ -227,6 +243,7 @@ class TopicModeler:
         n_outliers = sum(1 for t in topics if t == -1)
         n_real_topics = len(set(t for t in topics if t != -1))
         if n_outliers > 0 and n_real_topics > 0:
+            topics_before = list(topics)
             try:
                 topics = topic_model.reduce_outliers(
                     texts, topics, strategy="embeddings", threshold=0.4,
@@ -235,6 +252,7 @@ class TopicModeler:
                 topic_model.update_topics(
                     texts, topics=topics, vectorizer_model=vectorizer_model
                 )
+                self.reassigned = mark_reassigned(topics_before, topics)
                 logger.info(
                     "Reduced %d outlier chunks into existing topics", n_outliers
                 )
@@ -319,6 +337,13 @@ class TopicModeler:
         return topics
 
     def topic_dataframe(self, chunks: List[Chunk], topics: List[int], probs: List[float]) -> pd.DataFrame:
+        """Per-chunk topic assignments.
+
+        Carries a ``reassigned`` column from the most recent :meth:`fit`, so
+        consumers can tell a real assignment confidence from a stale one left
+        behind by outlier reduction.
+        """
+        reassigned = self.reassigned or [False] * len(chunks)
         data = []
         for idx, (chunk, topic, prob) in enumerate(zip(chunks, topics, probs)):
             data.append(
@@ -326,6 +351,7 @@ class TopicModeler:
                     "chunk_index": idx,
                     "topic": topic,
                     "prob": prob,
+                    "reassigned": bool(reassigned[idx]) if idx < len(reassigned) else False,
                     "start": chunk.start,
                     "end": chunk.end,
                     "text": chunk.text,

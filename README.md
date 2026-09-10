@@ -57,7 +57,7 @@ Environment variables (or .env) via pydantic BaseSettings:
 - `WHISPER_MODEL` (e.g., `small`, `base`, `medium`, `large-v3`) if using ASR fallback.
 - `EMBEDDING_MODEL` for BERTopic (default `all-mpnet-base-v2`).
 - `CHUNK_MAX_WORDS` (default 200) and `CHUNK_MAX_SECONDS` (default 60).
-- `SENTIMENT_MODEL` (default `siebert/sentiment-roberta-large-english`).
+- `SENTIMENT_MODEL` (default `cardiffnlp/twitter-roberta-base-sentiment-latest`).
 
 ## Notes
 
@@ -79,11 +79,22 @@ in −1 … +1, produced by the single conversion in `sentiment.py`
 model confidence, and a label the project cannot interpret raises rather than
 being silently treated as neutral.
 
-The default model (`siebert/sentiment-roberta-large-english`) is **binary** —
-it never emits a neutral class, so no chunk is ever scored neutral and values
-near zero mean low confidence, not neutrality. The UI states this wherever it
-shows a neutral band. Choose a three-way model such as
-`cardiffnlp/twitter-roberta-base-sentiment-latest` if you need one.
+The default model, `cardiffnlp/twitter-roberta-base-sentiment-latest`, is
+three-class: a procedural passage can genuinely be scored neutral.
+`siebert/sentiment-roberta-large-english` is offered as an option but is
+**binary** — it has no neutral class at all, so every chunk is forced positive
+or negative and values near zero mean low confidence, not neutrality. Whenever
+a run produces no neutral chunks the UI says so, and it only calls a model
+binary when that model actually is.
+
+## Chunk size
+
+The UI picks chunk length in seconds (15/30/60/120). `chunk_segments` splits on
+whichever bound trips first, so the API derives a matching word cap
+(`chunker.words_for_seconds`) rather than letting a fixed `CHUNK_MAX_WORDS`
+quietly cut a "120 s" chunk short at about 75 s. Set `chunk_max_words`
+explicitly on a run to override that. Both values are stamped into the run
+settings and every export.
 
 ## Tests
 

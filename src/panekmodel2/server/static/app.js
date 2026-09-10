@@ -31,6 +31,8 @@ const S = {
   hoverIndex: null,
   sort: 'share',
   exportKind: 'combined',
+  excerptMode: 'representative',
+  outlierVideo: 'all',
 };
 
 const CHUNK_OPTS = [15, 30, 60, 120];
@@ -40,10 +42,13 @@ const EMBED_OPTS = [
   ['BAAI/bge-base-en-v1.5', 'best recall, GPU recommended'],
 ];
 const SENT_OPTS = [
-  ['siebert/sentiment-roberta-large-english', 'binary (no neutral class) · default'],
-  ['cardiffnlp/twitter-roberta-base-sentiment-latest', 'three-way, emits neutral'],
+  ['cardiffnlp/twitter-roberta-base-sentiment-latest', 'three-way with a real neutral class · tuned on speech-like text · default'],
+  ['siebert/sentiment-roberta-large-english', 'binary, no neutral — every chunk is forced positive or negative'],
   ['distilbert-base-uncased-finetuned-sst-2-english', 'binary, faster, coarser'],
 ];
+// Below this assignment probability a chunk sits at the edge of its topic; the
+// UI marks it rather than presenting the assignment as settled.
+const LOW_CONFIDENCE = 0.5;
 const OUTLIER_COLOR = 'var(--line2)';
 
 // ── small helpers ───────────────────────────────────────────────────
@@ -95,6 +100,24 @@ function topicInfo(id) {
   if (t) return t;
   return { topic_id: -1, rank: -1, label: 'Outlier bin', color: OUTLIER_COLOR, keywords: [] };
 }
+function excerptsFor(topic) {
+  return (S.excerptMode === 'polarized' ? topic.excerpts_polarized : topic.excerpts) || [];
+}
+
+/* Assignment confidence, stated honestly. A chunk that outlier reduction moved
+   into this topic has no probability for it, so we say so instead of showing a
+   number that describes a topic it is no longer in. */
+function confidenceLabel(chunk) {
+  if (chunk.topic_reassigned) return 'reassigned from outliers';
+  if (chunk.topic_prob == null) return 'confidence n/a';
+  const label = 'assignment ' + Math.round(chunk.topic_prob * 100) + '%';
+  return chunk.topic_prob < LOW_CONFIDENCE ? label + ' · weak' : label;
+}
+
+function isLowConfidence(chunk) {
+  return chunk.topic_reassigned || chunk.topic_prob == null || chunk.topic_prob < LOW_CONFIDENCE;
+}
+
 function currentVideo() {
   if (!S.results) return null;
   return S.results.videos.find((v) => v.video_id === S.videoId) || S.results.videos[0] || null;
@@ -280,7 +303,8 @@ const NAV = [
   ['tsent', 'Topic sentiment', () => hasResults()],
   ['video', 'Video page', () => hasResults()],
   ['export', 'Export', () => hasResults()],
-  ['found', 'Foundations', () => true],
+  // Style guide, not a research view — separated at the bottom of the nav.
+  ['found', 'Foundations', () => true, 'utility'],
 ];
 
 function navTag(key) {
@@ -293,9 +317,10 @@ function navTag(key) {
 }
 
 function renderNav() {
-  $('#nav').innerHTML = NAV.map(([key, label, enabled]) => {
+  $('#nav').innerHTML = NAV.map(([key, label, enabled, kind]) => {
     const on = enabled();
-    return `<button type="button" data-go="${key}" ${on ? '' : 'disabled'} ${S.screen === key ? 'aria-current="page"' : ''}>
+    return `<button type="button" data-go="${key}" class="${kind === 'utility' ? 'nav-utility' : ''}"
+      ${on ? '' : 'disabled'} ${S.screen === key ? 'aria-current="page"' : ''}>
       <span class="nav-dot"></span><span class="nav-label">${esc(label)}</span>
       <span class="nav-tag">${esc(navTag(key))}</span></button>`;
   }).join('');
@@ -336,6 +361,7 @@ const CRUMBS = {
   tsent: [['Run', 'prog'], ['Batch overview', 'batch'], ['Topic sentiment', 'tsent']],
   video: [['Run', 'prog'], ['Batch overview', 'batch'], ['Video', 'video']],
   export: [['Run', 'prog'], ['Batch overview', 'batch'], ['Export', 'export']],
+  outliers: [['Batch overview', 'batch'], ['Topics', 'topics'], ['Outlier bin', 'outliers']],
   found: [['Throughline', 'run'], ['Foundations', 'found']],
 };
 
@@ -644,11 +670,26 @@ function screenBatch() {
   </div>`;
 }
 
+/* Models with no neutral class at all. Everything else gets described by what
+   it actually did in this run — a 3-class model can simply produce no neutral
+   chunks, and calling it binary on that basis would be a claim about the model
+   we have not earned. */
+const BINARY_MODELS = [
+  'siebert/sentiment-roberta-large-english',
+  'distilbert-base-uncased-finetuned-sst-2-english',
+];
+
 function neutralNote(R) {
   if (R.settings.model_produces_neutral) return '';
-  return `<div class="hint" style="margin-top:10px">${esc(shortModel(R.settings.sentiment_model))} is a
-    binary classifier — it never emits a neutral label, so no chunk is scored neutral. Values near zero mean
-    low model confidence, not a neutral reading. Pick a three-way model in Advanced settings if you need one.</div>`;
+  const model = R.settings.sentiment_model;
+  const reason = BINARY_MODELS.includes(model)
+    ? `${esc(shortModel(model))} is a binary classifier — it has no neutral class, so every chunk is
+       forced positive or negative.`
+    : `No chunk in this run was scored neutral: ${esc(shortModel(model))} returned only positive and
+       negative labels for this batch.`;
+  return `<div class="hint" style="margin-top:10px">${reason}
+    Values near zero mean low model confidence, not a neutral reading.
+    ${BINARY_MODELS.includes(model) ? 'Pick a three-way model in Advanced settings if you need one.' : ''}</div>`;
 }
 
 function histogram(bins) {
@@ -750,21 +791,31 @@ function screenTopics() {
         <div style="margin-top:auto">
           <div class="metric-row"><span>share of content</span><span class="v">${pct(R.outlier.share)}</span></div>
           <div class="thin-bar"><span class="hatch" style="width:${R.outlier.share * 100}%"></span></div>
-          <div class="mono-note" style="margin-top:10px">${R.outlier.n_chunks} chunks</div>
+          <button type="button" class="btn" style="margin-top:12px" data-go="outliers"
+            ${R.outlier.n_chunks ? '' : 'disabled'}>Inspect ${R.outlier.n_chunks} chunks</button>
         </div>
       </div>
     </div>
 
     <section>
       <div class="section-head">
-        <h2>Representative excerpts · ${esc(topic.label)}</h2>
-        <span class="mono-note">play → video page, player cued to the timestamp</span>
+        <h2>${S.excerptMode === 'polarized' ? 'Most polarized' : 'Representative'} excerpts · ${esc(topic.label)}</h2>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="mono-note">SHOW</span>
+          ${[['representative', 'Most representative'], ['polarized', 'Most polarized']].map(([k, label]) =>
+            `<button type="button" class="sort-btn" data-excerpt-mode="${k}" aria-pressed="${S.excerptMode === k}">${label}</button>`).join('')}
+        </div>
       </div>
+      <p class="mono-note" style="margin:-4px 0 12px">${S.excerptMode === 'polarized'
+        ? 'Strongest feeling either way — these are the extremes, not the typical case.'
+        : 'Highest topic-assignment probability — the chunks the model considers most typical of this topic.'}
+        · play → video page, player cued to the timestamp</p>
       <div class="quote-grid">
-        ${topic.excerpts.map((q) => `<div class="quote-card">
+        ${excerptsFor(topic).map((q) => `<div class="quote-card">
           <div style="display:flex;align-items:center;gap:8px">
             <span class="sent-swatch" style="background:${sentHex(q.valence)}"></span>
             <span class="mono-note">valence ${sig(q.valence)}</span>
+            <span class="mono-note" style="margin-left:auto">${confidenceLabel(q)}</span>
           </div>
           <blockquote>“${esc(q.text)}”</blockquote>
           <div class="quote-foot">
@@ -778,6 +829,63 @@ function screenTopics() {
         </div>`).join('')}
       </div>
     </section>
+  </div>`;
+}
+
+// ── screen: outlier inspector ───────────────────────────────────────
+/* Reachable from the outlier card on Topics. A plain browsable list: the point
+   is that the chunks the model refused to cluster are inspectable, not hidden
+   behind a percentage. */
+function screenOutliers() {
+  if (!hasResults()) return emptyResults('Outlier bin', 'The chunks the topic model refused to cluster, listed so you can read them.');
+  const R = S.results;
+  const rows = [];
+  R.videos.forEach((v) => {
+    v.chunks.forEach((c) => {
+      if (c.topic_id === -1) rows.push({ chunk: c, video: v });
+    });
+  });
+  const filtered = S.outlierVideo === 'all'
+    ? rows
+    : rows.filter((r) => r.video.video_id === S.outlierVideo);
+  const withOutliers = R.videos.filter((v) => v.chunks.some((c) => c.topic_id === -1));
+
+  return `<div class="stack">
+    <div>
+      <div class="kicker">TOPIC −1 · ${R.outlier.n_chunks} CHUNKS · ${pct(R.outlier.share)} OF THE BATCH</div>
+      <h1 style="margin:12px 0 8px">The outlier bin</h1>
+      <p class="lede">Chunks HDBSCAN would not put in any cluster — intros, ad reads, crosstalk, one-off asides.
+        They stay in the denominator of every share in this run. Read them here to judge whether the model
+        is discarding something you care about.</p>
+    </div>
+
+    <div class="card" style="overflow:hidden">
+      <div style="display:flex;align-items:center;gap:10px;padding:14px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap">
+        <span class="mono-note">VIDEO</span>
+        <button type="button" class="sort-btn" data-outlier-video="all" aria-pressed="${S.outlierVideo === 'all'}">All (${rows.length})</button>
+        ${withOutliers.map((v) => {
+          const n = v.chunks.filter((c) => c.topic_id === -1).length;
+          const short = v.title.length > 28 ? v.title.slice(0, 27) + '…' : v.title;
+          return `<button type="button" class="sort-btn" data-outlier-video="${esc(v.video_id)}"
+            aria-pressed="${S.outlierVideo === v.video_id}" title="${esc(v.title)}">${esc(short)} (${n})</button>`;
+        }).join('')}
+      </div>
+      <div class="outlier-head">
+        <div>TIMESTAMP</div><div>VIDEO</div><div>CHUNK</div><div style="text-align:right">VALENCE</div>
+      </div>
+      <div style="max-height:640px;overflow:auto">
+        ${filtered.length ? filtered.map(({ chunk, video }) => `<button type="button" class="outlier-row"
+          data-video="${esc(video.video_id)}" data-seek="${chunk.start}">
+          <div class="stamp mono-note">${fmtT(chunk.start)}</div>
+          <div class="ov">${esc(video.title)}</div>
+          <div class="otext">${esc(chunk.text)}</div>
+          <div style="display:flex;align-items:center;gap:7px;justify-content:flex-end">
+            ${valMini(chunk.valence)}<span class="mono-note">${sig(chunk.valence)}</span></div>
+        </button>`).join('')
+          : '<div style="padding:20px" class="hint">No outlier chunks in this video.</div>'}
+      </div>
+    </div>
+    <p class="mono-note">click a row → video page, player cued to that moment</p>
   </div>`;
 }
 
@@ -967,11 +1075,13 @@ function screenVideo() {
       <section class="card">
         <div style="display:flex;align-items:baseline;justify-content:space-between;padding:18px 22px 12px;border-bottom:1px solid var(--line)">
           <h2 style="font-size:18px">Transcript</h2>
-          <span class="mono-note">${S.results.settings.chunk_max_seconds} s chunks · left rule = topic · follows the playhead</span>
+          <span class="mono-note">${S.results.settings.chunk_max_seconds} s chunks · left rule = topic (dotted = weak assignment) · follows the playhead</span>
         </div>
         <div class="transcript" id="transcript">
-          ${v.chunks.map((c) => `<button type="button" class="t-row ${c.index === activeIdx ? 'active' : ''}"
+          ${v.chunks.map((c) => `<button type="button"
+            class="t-row ${c.index === activeIdx ? 'active' : ''} ${isLowConfidence(c) ? 'weak' : ''}"
             data-seek="${c.start}" data-video="${esc(v.video_id)}" data-chunk="${c.index}"
+            title="${esc(topicInfo(c.topic_id).label)} · ${esc(confidenceLabel(c))}"
             style="border-left-color:${topicInfo(c.topic_id).color}">
             <span class="stamp">${fmtT(c.start)}</span>
             <span class="txt">${esc(c.text)}</span>
@@ -1059,7 +1169,8 @@ const SCHEMAS = {
     ['text', 'string', 'Transcript text, quoted and escaped'],
     ['topic_id', 'int', '−1 = outlier bin'],
     ['topic_label', 'string', 'Generated from the topic’s top terms'],
-    ['topic_prob', 'float', 'Assignment confidence, 0…1'],
+    ['topic_prob', 'float', 'Assignment confidence, 0…1 — blank if reassigned'],
+    ['topic_reassigned', 'int', '1 = moved out of the outlier bin, so no confidence exists'],
     ['valence', 'float', 'Sentiment, −1 … +1 (neutral is exactly 0)'],
     ['sentiment_label', 'string', 'Raw model label'],
     ['sentiment_score', 'float', 'Raw model confidence, 0…1'],
@@ -1310,7 +1421,8 @@ const FLOWS = [
 // ── render ──────────────────────────────────────────────────────────
 const SCREENS = {
   run: screenRun, prog: screenProgress, batch: screenBatch, topics: screenTopics,
-  tsent: screenTopicSentiment, video: screenVideo, export: screenExport, found: screenFoundations,
+  tsent: screenTopicSentiment, video: screenVideo, export: screenExport,
+  outliers: screenOutliers, found: screenFoundations,
 };
 
 function render() {
@@ -1370,7 +1482,8 @@ function showTooltip(chunk, event) {
     <div class="body">“${esc(chunk.text.slice(0, 240))}${chunk.text.length > 240 ? '…' : ''}”</div>
     <div class="foot">${valMini(chunk.valence)}
       <span style="font:500 11.5px var(--mono);color:${sentHex(chunk.valence)}">valence ${sig(chunk.valence)}</span>
-      <span style="margin-left:auto" class="mono-note">click to seek</span></div>`;
+      <span style="margin-left:auto" class="mono-note">click to seek</span></div>
+    <div class="mono-note" style="margin-top:7px${isLowConfidence(chunk) ? ';color:var(--warn)' : ''}">${confidenceLabel(chunk)}</div>`;
   tip.hidden = false;
   const rect = tip.getBoundingClientRect();
   tip.style.left = clamp(event.clientX - rect.width / 2, 12, window.innerWidth - rect.width - 12) + 'px';
@@ -1520,7 +1633,7 @@ async function pollProgress() {
 
 // ── events ──────────────────────────────────────────────────────────
 document.addEventListener('click', (event) => {
-  const el = event.target.closest('[data-go],[data-action],[data-topic],[data-video],[data-field],[data-sort],[data-export],[data-dim]');
+  const el = event.target.closest('[data-go],[data-action],[data-topic],[data-video],[data-field],[data-sort],[data-export],[data-dim],[data-excerpt-mode],[data-outlier-video]');
   if (!el) return;
 
   if (el.dataset.go) {
@@ -1549,6 +1662,8 @@ document.addEventListener('click', (event) => {
   }
   if (el.dataset.sort) { S.sort = el.dataset.sort; return render(); }
   if (el.dataset.export) { S.exportKind = el.dataset.export; return render(); }
+  if (el.dataset.excerptMode) { S.excerptMode = el.dataset.excerptMode; return render(); }
+  if (el.dataset.outlierVideo) { S.outlierVideo = el.dataset.outlierVideo; return render(); }
   if (el.dataset.field) {
     const value = el.dataset.field === 'chunk_max_seconds' ? Number(el.dataset.value) : el.dataset.value;
     S.settings[el.dataset.field] = value;
@@ -1648,8 +1763,10 @@ function syncUrl() {
     render();
     await pollProgress();
     if (wanted && SCREENS[wanted]) {
+      // Screens reachable from within a page (the outlier inspector) are not
+      // in NAV; only screens that ARE in NAV have to satisfy a nav guard.
       const entry = NAV.find(([k]) => k === wanted);
-      if (entry && entry[2]()) { S.screen = wanted; render(); }
+      if (!entry || entry[2]()) { S.screen = wanted; render(); }
     }
     return;
   }

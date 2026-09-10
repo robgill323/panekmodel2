@@ -33,7 +33,10 @@ def combined_rows(results: dict) -> List[dict]:
                     "text": chunk["text"],
                     "topic_id": chunk["topic_id"],
                     "topic_label": topic["label"] if topic else "Outlier bin",
-                    "topic_prob": chunk["topic_prob"],
+                    # Blank when the chunk was reassigned out of the outlier
+                    # bin: no probability for its current topic exists.
+                    "topic_prob": "" if chunk["topic_prob"] is None else chunk["topic_prob"],
+                    "topic_reassigned": int(chunk["topic_reassigned"]),
                     "valence": chunk["valence"],
                     "sentiment_label": chunk["sentiment_label"],
                     "sentiment_score": chunk["sentiment_score"],

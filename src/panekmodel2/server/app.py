@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from ..chunker import words_for_seconds
 from ..config import Settings, get_settings
 from . import exports
 from .jobs import JobError, JobManager, settings_summary
@@ -54,6 +55,11 @@ def _resolve_settings(overrides: RunSettings) -> Settings:
         value = getattr(overrides, field)
         if value is not None:
             base[field] = value
+    # The UI picks chunk size in seconds. Derive the paired word cap unless the
+    # caller set one explicitly, so the chosen duration is what actually governs
+    # chunking rather than being cut short by a fixed word limit.
+    if overrides.chunk_max_seconds is not None and overrides.chunk_max_words is None:
+        base["chunk_max_words"] = words_for_seconds(overrides.chunk_max_seconds)
     return Settings(**base)
 
 

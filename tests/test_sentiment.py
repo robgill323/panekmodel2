@@ -96,3 +96,22 @@ def test_analyze_rejects_unmappable_model_output(monkeypatch):
 
     with pytest.raises(UnmappableSentimentLabel):
         analyzer.analyze([FakeChunk()])
+
+
+@pytest.mark.slow
+def test_default_model_labels_are_all_mappable():
+    """The configured default must emit labels normalize_sentiment understands.
+
+    Resolves the model's config from the Hub (no inference weights) so a
+    default swap cannot silently ship a model whose labels we would refuse.
+    """
+    from transformers import AutoConfig
+
+    from panekmodel2.config import Settings
+
+    config = AutoConfig.from_pretrained(Settings().sentiment_model)
+    labels = list(config.id2label.values())
+
+    validate_labels(labels)
+    assert produces_neutral(labels), "the default is documented as having a neutral class"
+    assert {l.lower() for l in labels} == {"negative", "neutral", "positive"}
