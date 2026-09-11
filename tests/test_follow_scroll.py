@@ -131,31 +131,113 @@ def _code_only(path: Path) -> str:
     return re.sub(r"^\s*//.*$", "", source, flags=re.M)
 
 
+# Characters after which a "/" begins a regex literal rather than a division.
+# The standard heuristic: a regex can only start where a value is expected.
+_REGEX_PRECEDERS = set("(,=:[!&|?{};\n") | {"return", "typeof", "case", "in", "of"}
+
+
+def _skip_regex(source: str, i: int) -> int:
+    """Index just past the regex literal starting at *i*, or raise.
+
+    N-5 remnant: a regex may contain unbalanced braces — /\\d{2,}/ has one —
+    so the brace scan has to step over it. Whether a "/" starts a regex or is
+    a division is genuinely ambiguous without a full parser, so this uses the
+    usual preceding-token heuristic and raises rather than guessing when the
+    literal does not terminate on its line.
+    """
+    j = i + 1
+    in_class = False
+    while j < len(source):
+        ch = source[j]
+        if ch == "\\":
+            j += 2
+            continue
+        if ch == "\n":
+            raise AssertionError(
+                "unterminated regex literal while scanning; the brace matcher "
+                "cannot be trusted here — simplify the function or assert "
+                "against the whole file instead."
+            )
+        if in_class:
+            if ch == "]":
+                in_class = False
+        elif ch == "[":
+            in_class = True
+        elif ch == "/":
+            return j + 1
+        j += 1
+    raise AssertionError("unterminated regex literal at end of source")
+
+
+def _looks_like_regex_start(source: str, i: int) -> bool:
+    """True when the "/" at *i* opens a regex rather than dividing."""
+    if source.startswith("//", i) or source.startswith("/*", i):
+        return False  # a comment; callers strip these, but be safe
+    k = i - 1
+    while k >= 0 and source[k] in " \t":
+        k -= 1
+    if k < 0:
+        return True
+    if source[k] in _REGEX_PRECEDERS:
+        return True
+    word = ""
+    while k >= 0 and (source[k].isalnum() or source[k] == "_"):
+        word = source[k] + word
+        k -= 1
+    return word in _REGEX_PRECEDERS
+
+
+def _scan_to_matching_brace(source: str, brace: int) -> int:
+    """Index of the "}" that closes the "{" at *brace*, skipping literals."""
+    depth = 0
+    i = brace
+    while i < len(source):
+        ch = source[i]
+        if ch in "\"'`":
+            quote, i = ch, i + 1
+            while i < len(source):
+                if source[i] == "\\":
+                    i += 2
+                    continue
+                if source[i] == quote:
+                    break
+                i += 1
+        elif ch == "/" and _looks_like_regex_start(source, i):
+            i = _skip_regex(source, i) - 1
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    raise AssertionError("unbalanced braces")
+
+
 def js_function_body(source: str, name: str) -> str:
     """The body of a named JS function, by brace matching.
 
-    File-wide substring checks are why N-4 slipped through: every one of the
-    four wiring regressions deletes a call from a *particular* function, and a
+    File-wide substring checks are why N-4 slipped through: every one of those
+    wiring regressions deletes a call from a *particular* function, and a
     string that still appears somewhere else in the file keeps the test green.
     Scoping each assertion to its enclosing function is what makes these bite.
 
-    N-5 hardening, and it fails loudly rather than mis-scoping:
+    It fails loudly rather than mis-scoping, which matters most for *absence*
+    assertions — a truncated body makes "X is not in this function" pass for
+    free (N-6). Guards, each with its own test:
 
-    * Braces inside string and template literals are skipped, so a literal
-      "}" cannot truncate a body early. Quote tracking starts at the opening
-      brace, not at the top of the file — an earlier stray quote elsewhere in
-      the file then cannot cascade and swallow everything after it, which is
-      exactly what a whole-file mask did when I tried that first.
-    * A name defined more than once raises, rather than the first definition
-      silently winning.
+    * duplicate definitions raise instead of the first silently winning;
+    * braces inside string and template literals are skipped;
+    * braces inside regex literals are skipped, and an unterminated regex
+      raises rather than being guessed at (N-5 remnant);
+    * the returned body is re-verified independently: it must start with "{",
+      end with "}", and balance to zero exactly once, at its final character.
+      A body truncated at an inner brace fails that check.
 
-    Known limit, recorded rather than guessed: a regex literal containing an
-    unbalanced brace would still confuse the scan. There are none in this
-    codebase, and the failure would be a loud "unbalanced braces", not a
-    quietly wrong body.
+    Quote tracking starts at the function's opening brace, not the top of the
+    file — a whole-file mask was the first attempt and one stray quote
+    cascaded, blanking most of the file including the function being sought.
     """
-    # One pattern only: "async function f(" contains "function f(", so
-    # searching both forms counted a single async definition twice.
     hits = list(_find_all(source, f"function {name}("))
     if not hits:
         raise AssertionError(f"{name}() not found — was it renamed?")
@@ -166,27 +248,62 @@ def js_function_body(source: str, name: str) -> str:
         )
 
     brace = source.index("{", hits[0])
+    close = _scan_to_matching_brace(source, brace)
+    body = source[brace : close + 1]
+    _assert_whole_body(body, name)
+    return body
+
+
+def _assert_whole_body(body: str, name: str) -> None:
+    """Independently re-derive the balance, so truncation cannot pass silently.
+
+    N-6: the reviewer showed a truncating helper shrinking a body from 670 to
+    433 characters while a canary survived, leaving an absence assertion
+    vacuous. A truncated body is unbalanced, so a balance check catches it
+    without needing to know the true length.
+
+    This deliberately does NOT reuse _scan_to_matching_brace. A cross-check
+    that shares the mechanism it is checking agrees with that mechanism's
+    mistakes: when both used the shared scanner, a deliberately truncating
+    scanner produced a truncated body and then pronounced it balanced. The
+    count below is simple and independent on purpose.
+    """
+    if not (body.startswith("{") and body.endswith("}")):
+        raise AssertionError(f"{name}() body is not brace-delimited: {body[:40]!r}…")
+
     depth = 0
-    quote = None
-    i = brace
-    while i < len(source):
-        ch = source[i]
-        if quote is not None:
-            if ch == "\\":
-                i += 2
-                continue
-            if ch == quote:
-                quote = None
-        elif ch in "\"'`":
-            quote = ch
+    i = 0
+    while i < len(body):
+        ch = body[i]
+        if ch in "\"'`":
+            # Shares the literal-skipping primitives, not the matching
+            # decision — that separation is the whole point.
+            quote, i = ch, i + 1
+            while i < len(body):
+                if body[i] == "\\":
+                    i += 2
+                    continue
+                if body[i] == quote:
+                    break
+                i += 1
+        elif ch == "/" and _looks_like_regex_start(body, i):
+            i = _skip_regex(body, i) - 1
         elif ch == "{":
             depth += 1
         elif ch == "}":
             depth -= 1
-            if depth == 0:
-                return source[brace : i + 1]
+            if depth == 0 and i != len(body) - 1:
+                raise AssertionError(
+                    f"{name}() body closes at offset {i} of {len(body) - 1} — it is "
+                    "truncated or over-long, so any absence assertion against it "
+                    "would pass vacuously."
+                )
         i += 1
-    raise AssertionError(f"unbalanced braces in {name}()")
+    if depth != 0:
+        raise AssertionError(
+            f"{name}() body never balances (depth {depth}) — it is truncated, so "
+            "any absence assertion against it would pass vacuously."
+        )
 
 
 def _find_all(haystack: str, needle: str):
@@ -366,3 +483,130 @@ def test_unbalanced_braces_fail_loudly():
 def test_async_functions_are_found():
     source = "async function a() { alpha(); }"
     assert "alpha()" in js_function_body(source, "a")
+
+
+# ── N-6: truncation must not defang an absence assertion ───────────
+def test_truncated_body_is_rejected_rather_than_returned():
+    """The reviewer's scenario: a shorter body makes absence checks vacuous.
+
+    _assert_whole_body re-derives the balance, so a body cut at an inner brace
+    cannot be handed back as if it were the whole function.
+    """
+    truncated = "{ if (x) { alpha(); }"
+    with pytest.raises(AssertionError, match="truncated"):
+        _assert_whole_body(truncated, "fake")
+
+
+def test_whole_body_accepts_a_complete_function():
+    _assert_whole_body("{ if (x) { alpha(); } }", "fake")
+
+
+def test_absence_assertions_cannot_pass_on_a_truncated_body():
+    """The property N-6 is really about, stated directly.
+
+    A canary surviving truncation is what made the old assertion vacuous, so
+    the guard must fire even when the canary is present in the kept part.
+    """
+    source = (
+        "function target() {\n"
+        "  canary();\n"
+        "  if (cond) { inner(); }\n"
+        "  forbidden();\n"
+        "}\n"
+    )
+    body = js_function_body(source, "target")
+    assert "canary()" in body
+    assert "forbidden()" in body, "the whole body must be returned, not a prefix"
+
+    # Simulate the truncating helper the reviewer demonstrated.
+    cut = source[source.index("{") : source.index("if (cond) { inner(); }") + len("if (cond) { inner(); }")]
+    assert "canary()" in cut, "the canary survives truncation — that was the trap"
+    assert "forbidden()" not in cut, "so an absence check would pass vacuously"
+    with pytest.raises(AssertionError, match="truncated"):
+        _assert_whole_body(cut, "target")
+
+
+def test_body_must_be_brace_delimited():
+    with pytest.raises(AssertionError, match="not brace-delimited"):
+        _assert_whole_body("alpha();", "fake")
+
+
+# ── N-5 remnant: braces inside regex literals ──────────────────────
+@pytest.mark.parametrize("regex", [
+    "/^\\{/",        # a lone opening brace — unbalanced upward
+    "/\\}$/",        # a lone closing brace — closes the body early
+    "/a{2,/",        # a malformed quantifier, still just text to the scanner
+])
+def test_unbalanced_braces_inside_a_regex_literal_do_not_break_scoping(regex):
+    """The braces must be genuinely unbalanced for this to bite.
+
+    My first version used /\\d{2,}/, whose braces balance — so removing regex
+    handling altogether left the test green. Caught by mutation-testing my own
+    fix, which is the third time in this task that a test of mine could not
+    have failed.
+    """
+    source = f"function a() {{ const re = {regex}; alpha(); }}\nfunction b() {{ beta(); }}"
+    body = js_function_body(source, "a")
+    assert "alpha()" in body
+    assert "beta()" not in body
+
+
+def test_regex_with_a_brace_in_a_character_class():
+    source = "function a() { const re = /[{}]/g; alpha(); }\nfunction b() { beta(); }"
+    body = js_function_body(source, "a")
+    assert "alpha()" in body
+    assert "beta()" not in body
+
+
+def test_division_is_not_mistaken_for_a_regex():
+    """The heuristic must not swallow code after an ordinary division."""
+    source = "function a() { const r = w / h; alpha(); }\nfunction b() { beta(); }"
+    body = js_function_body(source, "a")
+    assert "alpha()" in body
+    assert "beta()" not in body
+
+
+def test_an_unterminated_regex_raises_rather_than_guessing():
+    source = "function a() { const re = /unterminated\n alpha(); }"
+    with pytest.raises(AssertionError, match="unterminated regex"):
+        js_function_body(source, "a")
+
+
+def test_the_real_app_js_still_scopes_after_regex_handling():
+    """Guards against the heuristic mis-firing on the actual file."""
+    code = _code_only(APP_JS)
+    for name in ("followRow", "updatePlayhead", "setFollow", "bindTranscriptFollow"):
+        body = js_function_body(code, name)
+        assert body.startswith("{") and body.endswith("}")
+        assert len(body) > 40, f"{name}() body suspiciously short: {len(body)}"
+
+
+def test_js_function_body_actually_calls_the_truncation_guard(monkeypatch):
+    """Pins the WIRING, not just the guard's existence.
+
+    Found by mutation-testing my own fix: deleting the _assert_whole_body call
+    from js_function_body failed nothing, because every other N-6 test called
+    the guard directly. That is the same definition-versus-call-site gap N-4
+    was about, reproduced inside the fix for N-6.
+
+    The guard is defence against a future broken matcher, so the only way to
+    exercise it through the public function is to break the matcher on purpose.
+    """
+    import tests.test_follow_scroll as module
+
+    source = "function target() {\n  canary();\n  if (c) { inner(); }\n  forbidden();\n}\n"
+    assert "forbidden()" in js_function_body(source, "target"), "sanity: unbroken first"
+
+    def truncating_scan(text, brace):
+        # Return the first inner closing brace, i.e. the classic early exit.
+        depth = 0
+        for i in range(brace, len(text)):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                return i
+        raise AssertionError("unbalanced braces")
+
+    monkeypatch.setattr(module, "_scan_to_matching_brace", truncating_scan)
+    with pytest.raises(AssertionError, match="truncated"):
+        module.js_function_body(source, "target")

@@ -17,9 +17,9 @@ import pytest
 from panekmodel2.topic_model_params import (
     DEFAULT_GRANULARITY,
     GRANULARITY_DESCRIPTIONS,
-    GRANULARITY_FACTORS,
-    granularity_factor,
+    GRANULARITY_LEVELS,
     min_cluster_size_for,
+    validate_granularity,
 )
 
 LEVELS = ["coarse", "standard", "fine"]
@@ -31,21 +31,23 @@ def test_standard_is_the_default():
 
 def test_every_level_has_a_plain_language_description():
     """The UI shows these; a missing one would render blank."""
-    assert set(GRANULARITY_DESCRIPTIONS) == set(GRANULARITY_FACTORS) == set(LEVELS)
+    assert set(GRANULARITY_DESCRIPTIONS) == set(GRANULARITY_LEVELS) == set(LEVELS)
     for level in LEVELS:
         assert len(GRANULARITY_DESCRIPTIONS[level]) > 20
 
 
 @pytest.mark.parametrize("level", LEVELS)
-def test_factor_is_positive(level):
-    assert granularity_factor(level) > 0
+def test_every_level_has_a_complete_curve(level):
+    curve = GRANULARITY_LEVELS[level]
+    assert set(curve) == {"tiny", "small", "ceiling", "divisor"}
+    assert all(isinstance(v, int) and v > 0 for v in curve.values())
 
 
 @pytest.mark.parametrize("bad", ["COARSE", "medium", "", "fine ", None, 1])
 def test_unknown_granularity_raises(bad):
     """A typo in a .env must fail loudly, not silently pick a default."""
     with pytest.raises(ValueError, match="Unknown topic granularity"):
-        granularity_factor(bad)
+        validate_granularity(bad)
 
 
 def test_standard_preserves_the_previous_baseline():
@@ -62,7 +64,7 @@ def test_coarse_splits_less_than_standard_and_fine_splits_more(n):
     coarse = min_cluster_size_for(n, "coarse")
     standard = min_cluster_size_for(n, "standard")
     fine = min_cluster_size_for(n, "fine")
-    assert coarse > standard >= fine
+    assert coarse > standard > fine
 
 
 @pytest.mark.parametrize("n", [0, 1, 2, 3, 5, 10, 50, 10_000])
@@ -150,3 +152,85 @@ def test_params_module_does_not_import_bertopic():
               / "src/panekmodel2/topic_model_params.py").read_text()
     assert "bertopic" not in source
     assert "import numpy" not in source
+
+
+# ── N-7: the multiplier scheme was broken in a way the arithmetic hid ──
+def _pre_knob_standard(n: int) -> int:
+    """The function that predates the granularity knob, transcribed verbatim.
+
+    Standard staying byte-identical to this is load-bearing: adding an option
+    must not silently move anyone's existing results.
+    """
+    if n <= 10:
+        return 2
+    if n <= 50:
+        return 3
+    return max(3, min(5, n // 40))
+
+
+ALL_SIZES = range(1, 5001)
+
+
+def test_standard_is_byte_identical_to_the_pre_knob_function():
+    drift = [
+        n for n in ALL_SIZES
+        if min_cluster_size_for(n, "standard") != max(2, min(_pre_knob_standard(n), max(2, n)))
+    ]
+    assert drift == [], f"standard drifted at {drift[:10]}"
+
+
+def test_fine_actually_varies_with_corpus_size():
+    """N-7: 'fine' was the constant 2 at every size from 1 to 5000.
+
+    The baseline capped at 5, 5 * 0.5 banker-rounds to 2, and 2 is the floor —
+    so the documented multiplier design collapsed silently.
+    """
+    values = {min_cluster_size_for(n, "fine") for n in ALL_SIZES}
+    assert len(values) > 1, f"fine is constant at {values}, so the knob does nothing"
+
+
+def test_coarse_actually_varies_with_corpus_size():
+    assert len({min_cluster_size_for(n, "coarse") for n in ALL_SIZES}) > 1
+
+
+def test_fine_is_strictly_finer_than_standard_wherever_the_floor_allows():
+    """Below 11 chunks standard is already 2, so nothing can be finer."""
+    offenders = [
+        n for n in ALL_SIZES
+        if min_cluster_size_for(n, "standard") > 2
+        and min_cluster_size_for(n, "fine") >= min_cluster_size_for(n, "standard")
+    ]
+    assert offenders == [], f"fine not strictly finer at {offenders[:10]}"
+
+
+def test_coarse_is_strictly_coarser_than_standard_wherever_the_corpus_allows():
+    """At 2 chunks the corpus cap and the floor meet, so nothing can be coarser."""
+    offenders = [
+        n for n in ALL_SIZES
+        if n > 2
+        and min_cluster_size_for(n, "coarse") <= min_cluster_size_for(n, "standard")
+    ]
+    assert offenders == [], f"coarse not strictly coarser at {offenders[:10]}"
+
+
+def test_fine_and_standard_coincide_only_where_the_floor_forces_it():
+    """Documented honestly rather than papered over: the knob is inert here."""
+    coincide = [n for n in ALL_SIZES
+                if min_cluster_size_for(n, "fine") == min_cluster_size_for(n, "standard")]
+    assert coincide == list(range(1, 11))
+
+
+def test_ordering_holds_at_every_size():
+    for n in ALL_SIZES:
+        c = min_cluster_size_for(n, "coarse")
+        s = min_cluster_size_for(n, "standard")
+        f = min_cluster_size_for(n, "fine")
+        assert c >= s >= f, f"ordering broken at n={n}: {c}/{s}/{f}"
+
+
+def test_bounds_hold_at_every_size_and_level():
+    """2 <= m <= n, so HDBSCAN can never be handed an impossible minimum."""
+    for n in ALL_SIZES:
+        for level in LEVELS:
+            m = min_cluster_size_for(n, level)
+            assert 2 <= m <= max(2, n), f"{level} out of bounds at n={n}: {m}"

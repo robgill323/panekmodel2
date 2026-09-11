@@ -6,7 +6,7 @@ from typing import List, Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
-from .topic_model_params import DEFAULT_GRANULARITY, granularity_factor
+from .topic_model_params import DEFAULT_GRANULARITY, validate_granularity
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ def warn_about_retired_settings() -> List[str]:
 def get_settings() -> Settings:
     settings = Settings()
     # Fail at startup on a bad .env value rather than minutes into a batch.
-    granularity_factor(settings.topic_granularity)
+    validate_granularity(settings.topic_granularity)
     warn_about_retired_settings()
     # Propagate HF token to env for libraries that read os.environ directly.
     if settings.hf_token:

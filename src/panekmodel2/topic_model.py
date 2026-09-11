@@ -17,9 +17,9 @@ from .chunker import Chunk
 from .topic_model_params import (
     DEFAULT_GRANULARITY,
     GRANULARITY_DESCRIPTIONS,
-    GRANULARITY_FACTORS,
-    granularity_factor,
+    GRANULARITY_LEVELS,
     min_cluster_size_for,
+    validate_granularity,
 )
 
 logger = logging.getLogger(__name__)
@@ -96,7 +96,7 @@ class TopicModeler:
         self.reduce_to = reduce_to
         # Validated here rather than at fit time, so a bad value fails when the
         # runner is built instead of minutes into a batch.
-        granularity_factor(topic_granularity)
+        validate_granularity(topic_granularity)
         self.topic_granularity = topic_granularity
         self.extra_stop_words: List[str] = [w.lower().strip() for w in (extra_stop_words or []) if w.strip()]
         self.model: BERTopic | None = None

@@ -119,10 +119,21 @@ export cannot be reproduced from another without it.
 | `standard` | The balanced default; identical to the behaviour before this knob existed. |
 | `fine` | More, narrower topics. Use when one long video collapses into a single topic. |
 
-It scales HDBSCAN's minimum cluster size relative to the corpus-size
-baseline rather than setting an absolute, so it composes with batch size. The
+The value is HDBSCAN's minimum cluster size — the fewest chunks that may form
+a topic — and each level is its own curve over corpus size:
+
+| chunks | coarse | standard | fine |
+|---|---|---|---|
+| ≤ 10 | 4 | 2 | 2 |
+| 11–50 | 6 | 3 | 2 |
+| 200 | 10 | 5 | 2 |
+| ≥ 400 | 10 | 5 | 3 |
+
+`standard` is byte-identical to the behaviour that predates the knob. The
 result is always at least 2 and never more than the batch can support, so a
-coarse setting on a very short video cannot make the clusterer raise.
+coarse setting on a very short video cannot make the clusterer raise. Below 11
+chunks `standard` is already at the floor of 2, so `fine` cannot go finer and
+the knob is inert there — stated rather than hidden.
 
 ## Chunk size
 
