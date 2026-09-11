@@ -1,7 +1,7 @@
 evidence_bundle:
   artifact: src/panekmodel2/server/jobs.py
   produced_by: developer
-  worktree_ref: feature/ner-progress-stage@21cc07b
+  worktree_ref: feature/ner-progress-stage@40f9742
   items:
     - id: E-1
       kind: test-run
@@ -22,6 +22,41 @@ evidence_bundle:
       cwd: "."
       # D-1 and D-2 coverage: factory delegation, custom record classes,
       # traceback and stack_info redaction, third-party logging untouched.
+
+    - id: E-17
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests/test_follow_scroll.py -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+      # The scroll-hijack fix. Runs the pure scroll maths through node, so this
+      # is real coverage rather than prose - the first executable JS test here.
+
+    - id: E-18
+      kind: citation
+      ref: "src/panekmodel2/server/static/follow.js:25"
+      # followScrollTop — container-relative arithmetic that replaced
+      # row.scrollIntoView(), which scrolled every ancestor up to the document.
+
+    - id: E-19
+      kind: citation
+      ref: "src/panekmodel2/server/static/app.js:1555"
+      # followRow — assigns container.scrollTop only, behind a programmatic
+      # flag so the container's scroll handler does not read our own scroll
+      # back as the reader taking over.
+
+    - id: E-20
+      kind: citation
+      ref: "src/panekmodel2/server/static/app.js:1586"
+      # bindTranscriptFollow — a manual scroll inside the transcript pauses
+      # auto-follow; the chip, a row click, or navigating resumes it.
+
+    - id: E-21
+      kind: human-attested
+      claim: "The human-reported scroll-hijack was diagnosed at the line, not guessed: updatePlayhead() called row.scrollIntoView() on the active row every tick, and scrollIntoView scrolls every scrollable ancestor including the document, which is why following the playhead inside a 430px box moved the whole page and why scrolling back was undone on the next tick. All three required properties are implemented - container-only scrolling, pause on manual scroll with a re-enable chip, and highlighting that continues while paused - plus follow resuming when the reader navigates to any moment, so a pause on one video does not persist to the next."
+
+    - id: E-22
+      kind: assumed
+      claim: "The interactive half of the scroll fix is NOT covered by a test. The pure scroll maths is genuinely executed through node (18 cases), and structural assertions pin that app.js no longer calls scrollIntoView and that highlighting is not gated on follow state - but the scroll listener, the programmatic-scroll flag and the chip's show/hide are verified only by reading the code and by rendering the page. No browser-automation library is available in this environment, so the fight-for-the-viewport behaviour itself was never reproduced or replayed automatically. This is the one property the human should re-test by hand."
 
     - id: E-4
       kind: file-exists
