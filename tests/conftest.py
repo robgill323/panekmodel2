@@ -44,6 +44,17 @@ def clean_pipeline_state():
     assert not was_locked, "a test finished while still holding the pipeline lock"
 
 
+@pytest.fixture(autouse=True)
+def no_inherited_password(monkeypatch):
+    """Keep the machine's own THROUGHLINE_PASSWORD out of every test.
+
+    ``create_app()`` reads it from the environment by default, so a developer
+    who exports it for a real deployment would otherwise see the whole API
+    suite turn red with 401s. Tests that want the gate set it themselves.
+    """
+    monkeypatch.delenv("THROUGHLINE_PASSWORD", raising=False)
+
+
 @pytest.fixture
 def settings() -> Settings:
     return Settings(

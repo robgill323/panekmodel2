@@ -38,6 +38,28 @@ SECRET_PARAMS = (
 
 _SECRET_RE = re.compile(r"(?i)\b(" + "|".join(SECRET_PARAMS) + r")=([^&\s\"'<>\\)\]}]+)")
 
+# The header form, which the query-parameter pattern above structurally cannot
+# reach: HTTP credentials travel as `Authorization: Basic <base64>`, not as
+# `authorization=<value>`, so adding "authorization" to SECRET_PARAMS would do
+# nothing. Base64 is an encoding, not protection — a Basic header in a log is
+# the password in the log. Anything that renders a request's headers (an access
+# log, a debug middleware, an exception handler dumping the request) is a live
+# path to this, so it is scrubbed at the same choke point as the rest.
+#
+# The scheme token is required, which is what keeps prose such as
+# "authorization is required" and "the user is not authorized" untouched.
+_AUTH_HEADER_RE = re.compile(
+    r"""(?ix)
+    \b(authorization)                      # the header name
+    (                                      # separator; a dict or JSON repr
+      ["']? \s* [:=] \s* \\? ["']? \s*     #   quotes either side of the colon
+    )
+    (basic|bearer|token|digest|negotiate)  # the scheme — required
+    (\s+)
+    ([A-Za-z0-9\-._~+/=]+)                 # the credential itself
+    """
+)
+
 REDACTED = "REDACTED"
 
 PACKAGE = "panekmodel2"
@@ -48,8 +70,16 @@ _RENDERER = logging.Formatter()
 
 
 def redact_secrets(value: object) -> str:
-    """Strip credential-bearing query parameters out of *value*'s text."""
-    return _SECRET_RE.sub(lambda m: f"{m.group(1)}={REDACTED}", str(value))
+    """Strip credentials out of *value*'s text, in both forms they take.
+
+    Query parameters (``key=``, ``access_token=``, …) and HTTP ``Authorization``
+    headers. The scheme and header name survive so the line still says what
+    kind of credential was involved; only the secret goes.
+    """
+    text = _SECRET_RE.sub(lambda m: f"{m.group(1)}={REDACTED}", str(value))
+    return _AUTH_HEADER_RE.sub(
+        lambda m: m.group(1) + m.group(2) + m.group(3) + m.group(4) + REDACTED, text
+    )
 
 
 class RedactingMixin:

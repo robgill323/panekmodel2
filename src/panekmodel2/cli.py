@@ -41,22 +41,33 @@ def ui(
     port: int = typer.Option(8000, help="Port to serve on."),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the UI in a browser."),
 ):
-    """Serve the Throughline web UI (and its API) on this machine."""
-    from .server import serve  # noqa: PLC0415
+    """Serve the Throughline web UI (and its API) on this machine.
+
+    There is deliberately no ``--password`` option: a secret passed on the
+    command line is visible in shell history and in ``ps`` output. Set
+    ``THROUGHLINE_PASSWORD`` in the environment instead.
+    """
+    from .server import auth, serve  # noqa: PLC0415
 
     url = f"http://{host}:{port}/"
     console.print(f"[bold]Throughline[/bold] → {url}")
-    if host not in ("127.0.0.1", "localhost"):
+    if auth.configured_password():
         console.print(
-            "[yellow]Warning: binding a non-loopback interface exposes this "
-            "unauthenticated UI to your network.[/yellow]"
+            f"[green]Authentication required on every route[/green] "
+            f"({auth.PASSWORD_ENV} is set)."
         )
-    if open_browser:
+    # Only a loopback bind has a browser on the same machine to open, and a
+    # network bind with no password is about to be refused below.
+    if open_browser and auth.is_loopback_host(host):
         import threading  # noqa: PLC0415
         import webbrowser  # noqa: PLC0415
 
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
-    serve(host=host, port=port)
+    try:
+        serve(host=host, port=port)
+    except auth.BindRefused as exc:
+        console.print(f"[red]Refused to start.[/red]\n{exc}")
+        raise typer.Exit(code=2) from exc
 
 
 @app.command()

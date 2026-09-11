@@ -1,7 +1,9 @@
 """FastAPI app serving the Throughline UI and the pipeline API.
 
-Binds 127.0.0.1 by default: this is a local research instrument with no
-authentication, and it must not be reachable from the network by accident.
+Binds 127.0.0.1 by default: this is a research instrument that runs unbounded
+compute on request, so it must not become reachable from the network by
+accident. Binding anything else requires ``THROUGHLINE_PASSWORD``, which arms
+a gate over every route; see :mod:`panekmodel2.server.auth`.
 """
 
 from __future__ import annotations
@@ -18,12 +20,16 @@ from pydantic import BaseModel, Field
 
 from ..chunker import words_for_seconds
 from ..config import Settings, get_settings
-from . import exports
+from . import auth, exports
 from .jobs import JobError, JobManager, settings_summary
 
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# Distinguishes "caller passed no password" (read the environment) from
+# "caller passed None" (deliberately ungated, which the tests need).
+_FROM_ENV = object()
 
 
 class RunSettings(BaseModel):
@@ -66,8 +72,16 @@ def _resolve_settings(overrides: RunSettings) -> Settings:
     return Settings(**base)
 
 
-def create_app(manager: JobManager | None = None) -> FastAPI:
+def create_app(manager: JobManager | None = None, password=_FROM_ENV) -> FastAPI:
+    """Build the app, arming the password gate when one is configured.
+
+    *password* defaults to reading ``THROUGHLINE_PASSWORD``, so every entry
+    point is gated without having to remember to ask for it. Pass ``None`` to
+    build an explicitly ungated app.
+    """
     jobs = manager or JobManager()
+    if password is _FROM_ENV:
+        password = auth.configured_password()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -77,6 +91,11 @@ def create_app(manager: JobManager | None = None) -> FastAPI:
 
     app = FastAPI(title="Throughline", version="2.0", docs_url="/api/docs", lifespan=lifespan)
     app.state.jobs = jobs
+
+    # Added first so it wraps the entire stack — the router, the static mount
+    # and the docs routes all sit underneath it.
+    if password:
+        app.add_middleware(auth.PasswordGateMiddleware, password=password)
 
     @app.get("/api/health")
     def health() -> dict:
@@ -148,6 +167,21 @@ def _job(app: FastAPI, job_id: str):
 
 
 def serve(host: str = "127.0.0.1", port: int = 8000, reload: bool = False) -> None:
+    """Run the server, refusing a network bind that has no password.
+
+    The check happens here rather than in the CLI so that every caller gets
+    it — the CLI, a container ``CMD``, and anything importing ``serve``.
+    Raises :class:`auth.BindRefused` before the socket is opened.
+    """
     import uvicorn  # noqa: PLC0415
 
-    uvicorn.run(create_app(), host=host, port=port, reload=reload, log_level="info")
+    password = auth.require_auth_for_bind(host)
+    if password:
+        logger.info("Password gate armed on every route (%s is set).", auth.PASSWORD_ENV)
+    else:
+        logger.info(
+            "No %s set; serving %s without authentication.", auth.PASSWORD_ENV, host
+        )
+    uvicorn.run(
+        create_app(password=password), host=host, port=port, reload=reload, log_level="info"
+    )
