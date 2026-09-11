@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import time
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from panekmodel2.chunker import words_for_seconds
 from panekmodel2.server import exports
 from panekmodel2.server.app import create_app
-from panekmodel2.server.jobs import STAGES, Job, JobError, JobManager, Stage, normalize_urls
+from panekmodel2.server.jobs import (
+    MAX_URLS,
+    STAGES,
+    Job,
+    JobError,
+    JobManager,
+    Stage,
+    normalize_urls,
+)
 
 from .conftest import FakeRunner
 
@@ -298,12 +310,29 @@ def test_topic_export_includes_the_outlier_bin(results):
     assert rows[-1]["topic_label"] == "Outlier bin"
 
 
-def test_csv_quotes_text_containing_commas(results):
+def test_csv_round_trips_text_containing_commas_quotes_and_newlines(results):
+    """Transcript text is arbitrary: it must survive the CSV intact.
+
+    The previous version of this test only checked header names, so it would
+    have passed with quoting removed entirely.
+    """
+    nasty = 'He said, "we are done" — then,\nafter a pause, added: a,b,c'
+    results["videos"][0]["chunks"][0]["text"] = nasty
+
     body = exports.to_csv(results, "combined")
-    header = body.splitlines()[0].split(",")
+    rows = list(csv.reader(io.StringIO(body)))
+
+    header, first = rows[0], rows[1]
+    assert first[header.index("text")] == nasty
+    # One header row plus one row per chunk — the embedded newline must not
+    # have split a record.
+    assert len(rows) == results["totals"]["n_chunks"] + 1
+
+
+def test_csv_header_matches_the_documented_columns(results):
+    header = exports.to_csv(results, "combined").splitlines()[0].split(",")
     assert header[0] == "video_id"
-    assert "valence" in header
-    assert body.endswith("\n")
+    assert {"valence", "topic_prob", "topic_reassigned", "topic_label"} <= set(header)
 
 
 def test_export_filename_stamps_the_settings(results):
@@ -373,3 +402,154 @@ def test_explicit_word_cap_is_respected(client):
     wait_for(client, job_id)
     settings = client.get(f"/api/runs/{job_id}/results").json()["settings"]
     assert settings["chunk_max_words"] == 90
+
+
+# ── B-1: concurrent jobs must not cross topic labels ────────────────
+def test_concurrent_jobs_keep_their_own_topic_labels(settings, cache_home):
+    """Two jobs on ONE shared runner must each report their own corpus.
+
+    The runner — and the TopicModeler inside it — is shared. Reading the
+    keyword map off that runner after a run returned let a second run's fit
+    overwrite it first, silently relabelling the first run's topics.
+    """
+    import threading
+
+    started = threading.Event()
+
+    class SlowRunner(FakeRunner):
+        """Fit blocks until released, so the two runs genuinely overlap."""
+
+        def __init__(self, job_settings):
+            super().__init__(job_settings)
+            self.corpus = None
+            real_fit = self.topic_modeler.fit
+
+            def _fit(chunks, embeddings=None):
+                # Whichever video this run is about — recorded on the SHARED
+                # modeler, exactly like the real one records self.model.
+                self.corpus = chunks[0].text.split()[0]
+                started.set()
+                time.sleep(0.25)
+                return real_fit(chunks, embeddings=embeddings)
+
+            self.topic_modeler.fit = _fit
+
+        def topic_keywords(self, top_n: int = 10):
+            return {0: [f"keywords-describing-{self.corpus}"], 1: ["other"]}
+
+    shared = SlowRunner(settings)
+    app = create_app(JobManager(runner_factory=lambda _s: shared))
+
+    with TestClient(app) as client:
+        job_a = start(client, [URL_A])
+        started.wait(timeout=5)
+        job_b = start(client, [URL_B])
+        for job_id in (job_a, job_b):
+            assert wait_for(client, job_id, timeout=30)["status"] == "done"
+
+        labels_a = client.get(f"/api/runs/{job_a}/results").json()["topics"][0]["keywords"]
+        labels_b = client.get(f"/api/runs/{job_b}/results").json()["topics"][0]["keywords"]
+
+    assert labels_a == [f"keywords-describing-{VID_A}"], "job A was relabelled by job B's fit"
+    assert labels_b == [f"keywords-describing-{VID_B}"]
+
+
+def test_second_job_reports_itself_as_queued(settings, cache_home):
+    """Serialization is visible, not a silent stall."""
+    import threading
+
+    release = threading.Event()
+    started = threading.Event()
+
+    class BlockingRunner(FakeRunner):
+        def __init__(self, job_settings):
+            super().__init__(job_settings)
+            real_fit = self.topic_modeler.fit
+
+            def _fit(chunks, embeddings=None):
+                started.set()
+                release.wait(timeout=10)
+                return real_fit(chunks, embeddings=embeddings)
+
+            self.topic_modeler.fit = _fit
+
+    shared = BlockingRunner(settings)
+    app = create_app(JobManager(runner_factory=lambda _s: shared))
+    try:
+        with TestClient(app) as client:
+            job_a = start(client, [URL_A])
+            assert started.wait(timeout=5)
+            job_b = start(client, [URL_B])
+
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                if client.get(f"/api/runs/{job_b}").json()["waiting"]:
+                    break
+                time.sleep(0.02)
+            else:
+                raise AssertionError("second job never reported itself as waiting")
+
+            release.set()
+            assert wait_for(client, job_a, timeout=30)["status"] == "done"
+            assert wait_for(client, job_b, timeout=30)["status"] == "done"
+            assert client.get(f"/api/runs/{job_b}").json()["waiting"] is False
+    finally:
+        release.set()
+
+
+# ── B-2: the SPA's real payload must get the derived word cap ───────
+SPA_SETTINGS_KEYS = {
+    "chunk_max_seconds", "embedding_model", "sentiment_model",
+    "topic_reduce_to", "use_whisper_fallback", "detect_people",
+}
+
+
+def test_full_spa_payload_gets_the_derived_word_cap(client):
+    """The exact body the SPA posts — not a trimmed one."""
+    body = {
+        "urls": [URL_A],
+        "settings": {
+            "chunk_max_seconds": 120,
+            "embedding_model": "all-mpnet-base-v2",
+            "sentiment_model": "cardiffnlp/twitter-roberta-base-sentiment-latest",
+            "topic_reduce_to": 10,
+            "use_whisper_fallback": False,
+            "detect_people": False,
+        },
+    }
+    res = client.post("/api/runs", json=body)
+    assert res.status_code == 201
+    job_id = res.json()["job_id"]
+    wait_for(client, job_id)
+
+    settings = client.get(f"/api/runs/{job_id}/results").json()["settings"]
+    assert settings["chunk_max_seconds"] == 120
+    assert settings["chunk_max_words"] == words_for_seconds(120)
+    assert settings["chunk_max_words"] != 200, "a fixed cap would end a 120 s chunk at ~77 s"
+
+
+def test_spa_does_not_send_a_word_cap():
+    """Guards the client side of B-2: no chunk_max_words on the wire."""
+    source = (Path(__file__).resolve().parents[1]
+              / "src/panekmodel2/server/static/app.js").read_text()
+    settings_block = source.split("settings: {", 1)[1].split("},", 1)[0]
+    assert "chunk_max_words" not in settings_block
+    # startRun posts S.settings wholesale, so absence from that object is what
+    # keeps the cap off the request.
+    assert "settings: S.settings" in source
+
+
+# ── AC-4 / A-1 coverage ─────────────────────────────────────────────
+def test_batch_over_the_url_cap_is_rejected(client):
+    res = client.post("/api/runs", json={"urls": [f"https://youtu.be/{'a' * 11}{i:03d}"[:31]
+                                                  for i in range(MAX_URLS + 1)]})
+    assert res.status_code == 400
+    assert "at most" in res.json()["detail"]
+
+
+def test_all_urls_failing_keeps_the_batch_level_message(client):
+    """A-1: the aggregate error must not collapse into one URL's reason."""
+    job_id = start(client, [f"https://youtu.be/{'f' * 11}", "https://vimeo.com/1"])
+    progress = wait_for(client, job_id)
+    assert progress["status"] == "failed"
+    assert "No video in this batch could be analyzed" in progress["error"]

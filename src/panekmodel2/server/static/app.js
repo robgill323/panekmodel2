@@ -9,11 +9,14 @@ const S = {
   theme: localStorage.getItem('tl-theme') || 'light',
   urlText: '',
   adv: false,
+  /* Only the settings this UI actually exposes a control for. chunk_max_words
+     is deliberately absent: chunk size is chosen in seconds, and the server
+     derives the paired word cap. Sending a concrete word cap here would
+     suppress that derivation and cut a "120 s" chunk short at ~77 s. */
   settings: {
     chunk_max_seconds: 60,
-    chunk_max_words: 200,
     embedding_model: 'all-mpnet-base-v2',
-    sentiment_model: 'siebert/sentiment-roberta-large-english',
+    sentiment_model: 'cardiffnlp/twitter-roberta-base-sentiment-latest',
     topic_reduce_to: 10,
     use_whisper_fallback: false,
     detect_people: true,
@@ -526,7 +529,8 @@ function screenProgress() {
   const started = p.started_at ? new Date(p.started_at * 1000).toLocaleTimeString() : '—';
   const heading = p.status === 'done' ? 'Run complete'
     : p.status === 'failed' ? 'Run failed'
-      : `Reading ${p.counts.total} video${p.counts.total === 1 ? '' : 's'}`;
+      : p.waiting ? 'Waiting for the pipeline'
+        : `Reading ${p.counts.total} video${p.counts.total === 1 ? '' : 's'}`;
 
   return `<div class="prog-grid">
     <div style="display:flex;flex-direction:column;gap:20px">
@@ -551,7 +555,10 @@ function screenProgress() {
           </div>`).join('')}
         </div>
         ${p.status === 'failed' ? `<div class="banner error" style="margin-top:20px"><strong>Run failed.</strong> ${esc(p.error)}</div>` : ''}
-        ${p.status === 'running' ? `<div class="banner" style="margin-top:20px">
+        ${p.waiting ? `<div class="banner" style="margin-top:20px">
+          <strong>Queued.</strong> Another run is using the pipeline. One runs at a time — the topic model
+          is shared, so overlapping runs would corrupt each other's results. This one starts automatically.</div>` : ''}
+        ${p.status === 'running' && !p.waiting ? `<div class="banner" style="margin-top:20px">
           <strong>First run on this machine downloads model weights.</strong>
           Embedding and sentiment models are fetched once (several hundred MB) and cached;
           later runs start straight at the fetch stage.</div>` : ''}
@@ -1584,6 +1591,14 @@ setInterval(() => {
 async function startRun() {
   const urls = parseUrls(S.urlText);
   if (!urls.length) return;
+  // Belt-and-braces against a double click: the server serializes pipeline
+  // executions anyway, but a second job started here would queue behind the
+  // first for minutes for no reason.
+  if (S.starting) return;
+  if (S.progress && S.progress.status === 'running') {
+    S.runError = 'A run is already in progress. Wait for it to finish before starting another.';
+    return render();
+  }
   S.starting = true; S.runError = ''; render();
   try {
     const body = { urls, settings: S.settings };
@@ -1753,7 +1768,11 @@ function syncUrl() {
   if (params.get('theme')) S.theme = params.get('theme');
   try {
     const defaults = await api('/api/defaults');
-    Object.assign(S.settings, defaults);
+    // Adopt only the keys this UI controls — /api/defaults also reports
+    // chunk_max_words, and copying it in would put it back on the wire.
+    Object.keys(S.settings).forEach((key) => {
+      if (defaults[key] !== undefined) S.settings[key] = defaults[key];
+    });
   } catch (_) { /* keep built-in defaults */ }
 
   const job = params.get('job');

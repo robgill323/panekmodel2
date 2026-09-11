@@ -145,11 +145,17 @@ class MultiRunResult:
     Unpacks as ``(outputs, failures)`` so callers written against the older
     two-tuple keep working, while ``outcomes`` carries the per-URL record that
     makes positional URL↔output pairing unnecessary.
+
+    ``keywords`` is captured from the topic model during the run. Runners are
+    shared between jobs, and ``TopicModeler`` state is overwritten by the next
+    fit, so a caller that reads keywords off the runner *after* the run can be
+    handed another run's labels. Everything a run produced is returned here.
     """
 
     outputs: List["PipelineOutputs"]
     failures: List[tuple[str, BaseException]]
     outcomes: List[URLOutcome]
+    keywords: Dict[int, List[str]] = field(default_factory=dict)
 
     def __iter__(self):
         return iter((self.outputs, self.failures))
@@ -510,7 +516,13 @@ class PipelineRunner:
                 )
             )
         _prog("Done.")
-        return MultiRunResult(outputs=outputs, failures=failures, outcomes=outcomes)
+        return MultiRunResult(
+            outputs=outputs,
+            failures=failures,
+            outcomes=outcomes,
+            # Read while this run's fit is still the one on the modeler.
+            keywords=self.topic_keywords(),
+        )
 
     # Tokens that carry no semantic meaning and should never appear in topic
     # keyword lists.  Includes SentencePiece underscore artifacts, transcript

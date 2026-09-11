@@ -102,25 +102,10 @@ class FakeRunner(PipelineRunner):
             return object(), topics, probs
 
         self.topic_modeler.fit = _fit  # type: ignore[method-assign]
-
-        def _topic_dataframe(chunks, topics, probs):
-            reassigned = self.topic_modeler.reassigned or [False] * len(chunks)
-            return pd.DataFrame(
-                [
-                    {
-                        "chunk_index": i,
-                        "topic": t,
-                        "prob": p,
-                        "reassigned": reassigned[i],
-                        "start": c.start,
-                        "end": c.end,
-                        "text": c.text,
-                    }
-                    for i, (c, t, p) in enumerate(zip(chunks, topics, probs))
-                ]
-            )
-
-        self.topic_modeler.topic_dataframe = _topic_dataframe  # type: ignore[method-assign]
+        # topic_dataframe() is deliberately NOT stubbed: it is pure, cheap, and
+        # the real one owns the column set. A hand-rolled copy here once
+        # omitted `reassigned` and silently hid the excerpt-ranking and
+        # probability-nulling logic from every pipeline and API test.
 
         def _analyze(chunks):
             # Alternate polarity so valences are not degenerate.

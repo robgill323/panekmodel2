@@ -32,6 +32,13 @@ STAGES: List[tuple] = [
 
 MAX_URLS = 200
 
+# Runners — and the TopicModeler inside them — are shared between jobs and
+# carry per-run mutable state that fit() overwrites. Two fits overlapping would
+# corrupt each other regardless of how results are read back, so exactly one
+# pipeline execution runs at a time in this process. Queueing is the honest
+# behaviour for a single-user local instrument.
+_PIPELINE_LOCK = threading.Lock()
+
 
 class JobError(Exception):
     pass
@@ -63,6 +70,8 @@ class Job:
     detect_people: bool = True
     status: str = "queued"  # queued | running | done | failed
     error: str = ""
+    # True while this job is blocked waiting for another run's pipeline to end.
+    waiting: bool = False
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
@@ -80,6 +89,7 @@ class Job:
             return {
                 "job_id": self.id,
                 "status": self.status,
+                "waiting": self.waiting,
                 "error": self.error,
                 "created_at": self.created_at,
                 "started_at": self.started_at,
@@ -168,13 +178,27 @@ class JobManager:
     def _execute(self, job: Job) -> None:
         job.status = "running"
         job.started_at = time.time()
+        acquired = False
         try:
             runner = self._runner_factory(job.settings)
-            self._mark_stage(job, "fetch", "running")
 
             def on_progress(message: str) -> None:
                 self._on_progress(job, message)
 
+            # Wait our turn if another run is mid-pipeline, and say so rather
+            # than sitting on a "running" label that is doing nothing.
+            acquired = _PIPELINE_LOCK.acquire(blocking=False)
+            if not acquired:
+                job.waiting = True
+                self._mark_stage(
+                    job, "fetch", "queued", note="waiting for another run to finish"
+                )
+                job.log.append("Queued behind another run — one pipeline runs at a time.")
+                _PIPELINE_LOCK.acquire()
+                acquired = True
+                job.waiting = False
+
+            self._mark_stage(job, "fetch", "running")
             multi = runner.run_multi(
                 job.urls, progress=on_progress, detect_people=job.detect_people
             )
@@ -193,7 +217,9 @@ class JobManager:
             job.results = results_builder.build_results(
                 outputs=multi.outputs,
                 outcomes=multi.outcomes,
-                keywords=runner.topic_keywords(),
+                # From the run itself — never read back off the shared runner,
+                # whose model may already belong to the next job.
+                keywords=multi.keywords,
                 settings_summary=settings_summary(job.settings),
                 run={
                     "id": job.id,
@@ -206,11 +232,18 @@ class JobManager:
         except Exception as exc:  # noqa: BLE001
             logger.exception("Run %s failed", job.id)
             job.status = "failed"
-            job.error = describe_failure(exc) or str(exc)
+            # A JobError is already plain language and already embeds the
+            # per-URL reasons; running it through describe_failure() again
+            # matched one of those reasons and collapsed the whole message to
+            # it, telling someone who submitted 30 URLs about "the video".
+            job.error = str(exc) if isinstance(exc, JobError) else (describe_failure(exc) or str(exc))
             for stage in job.stages:
                 if stage.status in ("queued", "running"):
                     stage.status = "failed"
         finally:
+            if acquired:
+                _PIPELINE_LOCK.release()
+            job.waiting = False
             job.finished_at = time.time()
 
     def _apply_outcomes(self, job: Job, outcomes: List[URLOutcome]) -> None:
