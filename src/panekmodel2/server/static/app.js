@@ -1544,7 +1544,9 @@ function updatePlayhead() {
     row.classList.toggle('active', on);
     if (on) activeRow = row;
   });
-  if (activeRow && S.playing && S.followTranscript) followRow(activeRow);
+  if (activeRow && shouldFollow({ playing: S.playing, followEnabled: S.followTranscript })) {
+    followRow(activeRow);
+  }
 }
 
 /* Scrolls the transcript's own container and nothing else.
@@ -1579,7 +1581,7 @@ function setFollow(on) {
   if (S.followTranscript === on) return;
   S.followTranscript = on;
   const chip = $('#follow-chip');
-  if (chip) chip.hidden = on;
+  if (chip) chip.hidden = followChipHidden({ followEnabled: S.followTranscript });
 }
 
 /* A manual scroll inside the transcript hands control to the reader. */
@@ -1587,8 +1589,7 @@ function bindTranscriptFollow() {
   const container = $('#transcript');
   if (!container) return;
   container.addEventListener('scroll', () => {
-    if (programmaticScroll) return;
-    setFollow(false);
+    if (isReaderScroll({ programmatic: programmaticScroll })) setFollow(false);
   }, { passive: true });
 }
 

@@ -60,7 +60,40 @@ function followScrollTop(view) {
   return Math.round(target) === Math.round(scrollTop) ? null : target;
 }
 
-/* Exported for the node-based unit test; the browser just picks up the global. */
+
+/* ── The decisions the DOM layer makes, extracted so they can be tested ──
+   followScrollTop above answers "where to scroll". These answer "whether to",
+   which is where the regressions live: each is one boolean that a plausible
+   one-line change could invert, and none of them needs a browser to check. */
+
+/**
+ * Should this playback tick scroll the transcript?
+ * Scrolling is the only thing pausing suspends — highlighting is unconditional.
+ */
+function shouldFollow(state) {
+  return Boolean(state && state.playing && state.followEnabled);
+}
+
+/**
+ * Does this scroll event mean the reader has taken over?
+ *
+ * Auto-follow scrolls the container itself, so the container's scroll handler
+ * sees our own scrolls too. Without the programmatic flag it reads the first
+ * one back as the reader taking over, disables following, and never recovers.
+ */
+function isReaderScroll(event) {
+  return !(event && event.programmatic);
+}
+
+/**
+ * Is the "follow playhead" chip hidden?
+ * It exists to offer the way back, so it is visible exactly when follow is off.
+ */
+function followChipHidden(state) {
+  return Boolean(state && state.followEnabled);
+}
+
+/* Exported for the node-based unit tests; the browser picks up the globals. */
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { followScrollTop };
+  module.exports = { followScrollTop, shouldFollow, isReaderScroll, followChipHidden };
 }
