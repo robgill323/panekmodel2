@@ -23,13 +23,20 @@ from .runners import get_runner
 
 logger = logging.getLogger(__name__)
 
-# The pipeline's ordered stages, mirrored in the UI's progress screen.
+# The pipeline's stages, in the order they actually execute, mirrored in the
+# UI's progress screen. Everything up to and including entities runs per video;
+# the topic model is fitted once at the end over the whole batch.
+#
+# Entity detection earns its own stage because it is the slowest step by a wide
+# margin. Without one, a run showed all stages complete about a minute in and
+# then sat silent for the remaining ~84% of its wall clock.
 STAGES: List[tuple] = [
     ("fetch", "Fetching transcripts"),
     ("chunk", "Chunking"),
     ("embed", "Embedding"),
-    ("topics", "Topic modelling (BERTopic, whole batch)"),
     ("sentiment", "Sentiment"),
+    ("entities", "People & entities"),
+    ("topics", "Topic modelling (BERTopic, whole batch)"),
 ]
 
 MAX_URLS = 200
@@ -243,6 +250,8 @@ class JobManager:
         job.stage("chunk").name = f"Chunking ({settings.chunk_max_seconds} s)"
         job.stage("embed").name = f"Embedding · {settings.embedding_model}"
         job.stage("sentiment").name = f"Sentiment · {settings.sentiment_model}"
+        if not detect_people:
+            job.stage("entities").name = "People & entities (off)"
         for url in cleaned:
             job.url_states[url] = {
                 "url": url,
@@ -295,7 +304,7 @@ class JobManager:
             )
             self._apply_outcomes(job, multi.outcomes)
 
-            for key in ("fetch", "chunk", "embed", "topics", "sentiment"):
+            for key in ("fetch", "chunk", "embed", "sentiment", "entities", "topics"):
                 self._mark_stage(job, key, "done", progress=1.0)
 
             if not multi.outputs:
@@ -360,6 +369,7 @@ class JobManager:
     # identify a stage transition onto the structured stage list.
     _RE_CHUNKS = re.compile(r"(\w[\w-]*): (\d+) segments → (\d+) chunks")
     _RE_CACHE = re.compile(r"([\w-]+): loaded from cache \((\d+) chunks\)")
+    _RE_ENTITIES = re.compile(r"([\w-]+): detecting people & entities")
 
     def _on_progress(self, job: Job, message: str) -> None:
         job.log.append(message)
@@ -386,12 +396,21 @@ class JobManager:
                              note=f"{done_urls}/{total} videos embedded")
         elif "running sentiment" in message:
             self._mark_stage(job, "sentiment", "running", progress=(done_urls + 0.5) / total)
+        elif self._RE_ENTITIES.search(message):
+            m = self._RE_ENTITIES.search(message)
+            self._touch_url(job, m.group(1), "running", note="detecting entities")
+            # Deliberately does NOT mark sentiment done: with a batch, the next
+            # video's chunk/embed/sentiment still lie ahead. Every per-video
+            # stage is closed together when the shared fit starts, which keeps
+            # the progression monotone instead of showing sentiment finishing
+            # before chunking.
+            self._mark_stage(job, "entities", "running", progress=(done_urls + 0.5) / total,
+                             note=f"{done_urls}/{total} videos")
         elif message.startswith("Fitting topic model"):
-            for key in ("fetch", "chunk", "embed", "sentiment"):
+            # Everything per-video is finished by the time the shared fit starts.
+            for key in ("fetch", "chunk", "embed", "sentiment", "entities"):
                 self._mark_stage(job, key, "done", progress=1.0)
             self._mark_stage(job, "topics", "running", progress=0.5, note=message)
-        elif message.startswith("Detecting people"):
-            self._mark_stage(job, "topics", "done", progress=1.0)
         elif message.startswith("⚠ Skipping"):
             self._mark_stage(job, "fetch", "running", progress=(done_urls + 1) / total)
 

@@ -119,8 +119,45 @@ def test_job_lifecycle(client):
 
     assert progress["status"] == "done"
     assert progress["counts"] == {"total": 2, "ok": 2, "skipped": 0, "queued": 0}
-    assert [s["status"] for s in progress["stages"]] == ["done"] * 5
+    assert [s["status"] for s in progress["stages"]] == ["done"] * len(STAGES)
     assert [u["video_id"] for u in progress["urls"]] == [VID_A, VID_B]
+
+
+def test_progress_stages_are_in_execution_order(client):
+    """The stage list is a promise about what runs when.
+
+    Everything up to entities is per-video; the shared topic fit is last. The
+    list previously claimed topics ran before sentiment, which was never true.
+    """
+    job_id = start(client, [URL_A])
+    progress = wait_for(client, job_id)
+
+    assert [s["key"] for s in progress["stages"]] == [
+        "fetch", "chunk", "embed", "sentiment", "entities", "topics",
+    ]
+
+
+def test_entity_detection_has_its_own_stage(client):
+    """The 84%-silent-progress defect: NER used to run under no stage at all."""
+    res = client.post("/api/runs", json={"urls": [URL_A], "settings": {"detect_people": True}})
+    job_id = res.json()["job_id"]
+    progress = wait_for(client, job_id)
+
+    entities = next(s for s in progress["stages"] if s["key"] == "entities")
+    assert entities["status"] == "done"
+    assert entities["name"] == "People & entities"
+    # And the work it stands for actually happened.
+    results = client.get(f"/api/runs/{job_id}/results").json()
+    assert results["videos"][0]["entities"]
+
+
+def test_entities_stage_is_labelled_off_when_detection_is_disabled(client):
+    job_id = start(client, [URL_A])  # start() sets detect_people=False
+    progress = wait_for(client, job_id)
+
+    entities = next(s for s in progress["stages"] if s["key"] == "entities")
+    assert entities["name"] == "People & entities (off)"
+    assert entities["status"] == "done"
 
 
 def test_results_are_409_until_the_run_finishes(client):

@@ -260,3 +260,73 @@ def test_oauth_settings_are_gone_from_the_model():
     fields = set(Settings().model_dump())
     assert "google_credentials_file" not in fields
     assert "google_token_file" not in fields
+
+
+# ── entity detection moved into the per-video pass (story-3a) ───────
+def test_entities_are_cached_with_the_video(settings, cache_home):
+    """NER was ~84% of a real run's wall clock and re-ran on every batch.
+
+    Detecting per video means the result lands in the cache, so a repeat run
+    does no NER work at all.
+    """
+    runner = FakeRunner(settings)
+    calls = []
+    real_detect = runner._detect_people
+    runner._detect_people = lambda chunks: (calls.append(len(chunks)) or real_detect(chunks))
+
+    url = "https://youtu.be/" + "a" * 11
+    first = runner.run_multi([url], detect_people=True)
+    assert first.outputs[0].people, "entities should be detected on a cold run"
+    assert len(calls) == 1
+
+    second = runner.run_multi([url], detect_people=True)
+    assert second.outputs[0].people == first.outputs[0].people
+    assert len(calls) == 1, "a cached video must not be re-scanned for entities"
+
+
+def test_cached_entry_without_entities_is_topped_up(settings, cache_home):
+    """A run with detection off must not poison the cache for a later run."""
+    runner = FakeRunner(settings)
+    url = "https://youtu.be/" + "a" * 11
+
+    off = runner.run_multi([url], detect_people=False)
+    assert off.outputs[0].people == {}
+
+    on = runner.run_multi([url], detect_people=True)
+    assert on.outputs[0].people, "entities should be computed for the cached video"
+    # Topping up must not have re-fetched the transcript.
+    assert runner.fetch_calls.count("a" * 11) == 1
+
+
+def test_entities_are_per_video_and_zero_based(settings, cache_home):
+    """The old batch-wide pass needed re-indexing; this must not regress."""
+    runner = FakeRunner(settings)
+    result = runner.run_multi(
+        ["https://youtu.be/" + c * 11 for c in "ab"], detect_people=True
+    )
+    for output in result.outputs:
+        assert output.people
+        assert all(0 <= i < len(output.chunks) for i in output.people)
+
+
+def test_detection_off_yields_no_entities(settings, cache_home):
+    runner = FakeRunner(settings)
+    result = runner.run_multi(["https://youtu.be/" + "a" * 11], detect_people=False)
+    assert result.outputs[0].people == {}
+
+
+def test_cache_version_bumped_for_the_people_key():
+    """v2 entries have no `people`; reading one as v3 must miss, not KeyError."""
+    from panekmodel2.pipeline import CACHE_ENTRY_KEYS, CACHE_VERSION
+
+    assert CACHE_VERSION >= 3
+    assert "people" in CACHE_ENTRY_KEYS
+
+
+def test_v2_shaped_entry_is_discarded(tmp_path):
+    """Belt and braces: a stale entry lacking `people` is not handed back."""
+    cache = VideoCache(cache_dir=tmp_path)
+    v2_entry = {k: [] for k in CACHE_ENTRY_KEYS - {"people"}}
+    v2_entry["video_id"] = "vid"
+    cache.save("vid", "key", v2_entry)
+    assert cache.load("vid", "key") is None

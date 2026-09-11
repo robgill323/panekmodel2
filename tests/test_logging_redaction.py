@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import logging
+from contextlib import contextmanager
 
 import pytest
 
@@ -24,18 +25,32 @@ REQUEST_URL = (
 )
 
 
-def capture(logger_name: str, message: str, *args) -> str:
-    """Log through the real logging machinery and return the rendered text."""
+@contextmanager
+def attached(logger_name: str, level: int = logging.INFO):
+    """Attach a capturing handler, then put the logger back exactly as found.
+
+    Restoring the LEVEL matters as much as removing the handler: leaving a
+    package logger at ERROR silently suppresses warnings that other tests
+    assert on, which is a test-pollution bug rather than a product one.
+    """
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
     handler.setFormatter(logging.Formatter("%(message)s"))
     logger = logging.getLogger(logger_name)
+    previous_level = logger.level
     logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
+    logger.setLevel(level)
     try:
-        logger.warning(message, *args)
+        yield stream
     finally:
         logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+
+
+def capture(logger_name: str, message: str, *args) -> str:
+    """Log through the real logging machinery and return the rendered text."""
+    with attached(logger_name) as stream:
+        logging.getLogger(logger_name).warning(message, *args)
     return stream.getvalue()
 
 
@@ -111,3 +126,97 @@ def test_package_constant_matches_the_real_package():
     import panekmodel2
 
     assert panekmodel2.__name__ == PACKAGE
+
+
+# ── D-1: a pre-existing record factory must survive install() ───────
+def test_install_delegates_to_a_pre_existing_factory():
+    """structlog / OpenTelemetry / correlation-id setups install one first.
+
+    Constructing a bare LogRecord silently discarded whatever they had done.
+    """
+    from panekmodel2 import logging_redaction
+
+    logging_redaction.uninstall()
+    previous = logging.getLogRecordFactory()
+    try:
+        def third_party(*args, **kwargs):
+            record = previous(*args, **kwargs)
+            record.correlation_id = "corr-123"
+            return record
+
+        logging.setLogRecordFactory(third_party)
+        logging_redaction.install()
+
+        for name in ("panekmodel2.pipeline", "somelib.http"):
+            record = logging.getLogger(name).makeRecord(
+                name, logging.WARNING, "f", 1, "hello", (), None
+            )
+            assert record.correlation_id == "corr-123", f"{name} lost the third-party stamp"
+    finally:
+        logging_redaction.uninstall()
+        logging.setLogRecordFactory(previous)
+        logging_redaction.install()
+
+
+def test_package_records_keep_the_third_party_class_behaviour():
+    """Re-classing must mix redaction in, not replace what the factory built."""
+    from panekmodel2 import logging_redaction
+
+    logging_redaction.uninstall()
+    previous = logging.getLogRecordFactory()
+    try:
+        class CustomRecord(logging.LogRecord):
+            def custom_marker(self):
+                return "custom"
+
+        logging.setLogRecordFactory(
+            lambda *a, **k: CustomRecord(*a, **k)
+        )
+        logging_redaction.install()
+
+        record = logging.getLogger("panekmodel2.pipeline").makeRecord(
+            "panekmodel2.pipeline", logging.WARNING, "f", 1, "?key=%s", (KEY,), None
+        )
+        assert record.custom_marker() == "custom", "the custom class was thrown away"
+        assert KEY not in record.getMessage(), "redaction was not mixed in"
+    finally:
+        logging_redaction.uninstall()
+        logging.setLogRecordFactory(previous)
+        logging_redaction.install()
+
+
+# ── D-2: exc_info tracebacks are a separate rendering path ──────────
+def test_traceback_text_is_redacted():
+    """Formatter.format renders exc_info separately from getMessage()."""
+    with attached("panekmodel2.server.jobs", logging.ERROR) as stream:
+        try:
+            raise RuntimeError(f"HttpError 403 {REQUEST_URL}")
+        except RuntimeError:
+            logging.getLogger("panekmodel2.server.jobs").exception("run failed")
+
+    out = stream.getvalue()
+    assert "Traceback" in out, "the traceback must still be rendered"
+    assert KEY not in out, "the API key leaked through the traceback"
+    assert "key=REDACTED" in out
+    assert "RuntimeError" in out, "redaction must not eat the exception type"
+
+
+def test_stack_info_is_redacted():
+    with attached("panekmodel2.pipeline", logging.ERROR) as stream:
+        logging.getLogger("panekmodel2.pipeline").error(
+            "boom %s", REQUEST_URL, stack_info=True
+        )
+
+    out = stream.getvalue()
+    assert "Stack (most recent call last)" in out
+    assert KEY not in out
+
+
+def test_traceback_redaction_does_not_disturb_other_packages():
+    with attached("somelib.worker", logging.ERROR) as stream:
+        try:
+            raise RuntimeError(f"HttpError 403 {REQUEST_URL}")
+        except RuntimeError:
+            logging.getLogger("somelib.worker").exception("their failure")
+
+    assert KEY in stream.getvalue()

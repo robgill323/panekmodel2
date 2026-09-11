@@ -31,12 +31,12 @@ logger = logging.getLogger(__name__)
 # older layout are never read back into the new one.  v2 unified the shapes
 # written by run() and run_multi(), which previously differed by the
 # ``video_id`` key and blew up run_multi with a KeyError on a mixed cache.
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 
 # Keys every cache entry must carry.  A stored entry missing any of these is
 # treated as stale rather than trusted.
 CACHE_ENTRY_KEYS = frozenset(
-    {"video_id", "metadata", "segments", "chunks", "embeddings", "sentiments"}
+    {"video_id", "metadata", "segments", "chunks", "embeddings", "sentiments", "people"}
 )
 
 
@@ -47,8 +47,13 @@ def build_cache_entry(
     chunks: List[Chunk],
     embeddings,
     sentiments: List[SentimentResult],
+    people: Optional[Dict[int, List[str]]] = None,
 ) -> dict:
-    """Build the one cache-entry shape both run() and run_multi() use."""
+    """Build the one cache-entry shape both run() and run_multi() use.
+
+    ``people`` is None when entity detection was switched off for the run that
+    wrote the entry — distinct from {}, which means "detected, found none".
+    """
     return {
         "video_id": video_id,
         "metadata": metadata,
@@ -56,6 +61,7 @@ def build_cache_entry(
         "chunks": chunks,
         "embeddings": embeddings,
         "sentiments": sentiments,
+        "people": people,
     }
 
 
@@ -346,7 +352,7 @@ class PipelineRunner:
         if entry:
             logger.info("%s: loaded transcript + embeddings + sentiments from cache", video_id)
         else:
-            entry = self._prepare_video(video_id, cache, cache_key)
+            entry = self._prepare_video(video_id, cache, cache_key, detect_people=detect_people)
 
         chunks = entry["chunks"]
         embeddings = entry["embeddings"]
@@ -356,7 +362,7 @@ class PipelineRunner:
         topics_df = self.topic_modeler.topic_dataframe(chunks, topics, probs)
 
         sentiment_rollup = self.sentiment_analyzer.aggregate(sentiments)
-        people = self._detect_people(chunks) if detect_people else {}
+        people = self._people_for(entry, cache, cache_key, detect_people)
 
         return PipelineOutputs(
             video_id=entry["video_id"],
@@ -369,12 +375,36 @@ class PipelineRunner:
             people=people,
         )
 
+    def _people_for(
+        self,
+        entry: dict,
+        cache: VideoCache,
+        cache_key: str,
+        detect_people: bool,
+        progress: Callable[[str], None] | None = None,
+    ) -> Dict[int, List[str]]:
+        """Entities for a cached entry, computing them only if they are missing.
+
+        An entry written by a run with detection off stores ``people=None``.
+        Rather than re-fetch and re-embed the video, detect over its cached
+        chunks and top the entry up in place.
+        """
+        if not detect_people:
+            return {}
+        if entry.get("people") is None:
+            if progress:
+                progress(f"{entry['video_id']}: detecting people & entities…")
+            entry["people"] = self._detect_people(entry["chunks"])
+            cache.save(entry["video_id"], cache_key, entry)
+        return entry["people"]
+
     def _prepare_video(
         self,
         video_id: str,
         cache: VideoCache,
         cache_key: str,
         progress: Callable[[str], None] | None = None,
+        detect_people: bool = True,
     ) -> dict:
         """Fetch, chunk, embed and score one video, then cache the result.
 
@@ -399,6 +429,14 @@ class PipelineRunner:
         embeddings = self.topic_modeler.embed_chunks(chunks)
         _prog(f"{video_id}: running sentiment…")
         sentiments = self.sentiment_analyzer.analyze(chunks)
+        people = None
+        if detect_people:
+            # NER runs here rather than as a trailing pass over the whole
+            # batch. It is the slowest stage by a wide margin, so running it
+            # per video means it lands in the cache, and means the progress
+            # screen can show it advancing instead of going quiet.
+            _prog(f"{video_id}: detecting people & entities…")
+            people = self._detect_people(chunks)
         entry = build_cache_entry(
             video_id=video_id,
             metadata=metadata,
@@ -406,6 +444,7 @@ class PipelineRunner:
             chunks=chunks,
             embeddings=embeddings,
             sentiments=sentiments,
+            people=people,
         )
         cache.save(video_id, cache_key, entry)
         return entry
@@ -454,8 +493,11 @@ class PipelineRunner:
                 entry = cache.load(video_id, cache_key)
                 if entry:
                     _prog(f"{video_id}: loaded from cache ({len(entry['chunks'])} chunks)")
+                    self._people_for(entry, cache, cache_key, detect_people, progress=_prog)
                 else:
-                    entry = self._prepare_video(video_id, cache, cache_key, progress=_prog)
+                    entry = self._prepare_video(
+                        video_id, cache, cache_key, progress=_prog, detect_people=detect_people
+                    )
                 per_video.append(entry)
                 outcomes.append(URLOutcome(url=url, video_id=video_id, status="analyzed"))
             except Exception as exc:  # noqa: BLE001
@@ -486,12 +528,6 @@ class PipelineRunner:
         # sentiments are already computed (cached per video) — just concatenate
         sentiments_combined = [s for v in per_video for s in v["sentiments"]]
 
-        if detect_people:
-            _prog("Detecting people…")
-            people_combined = self._detect_people(all_chunks)
-        else:
-            people_combined = {}
-
         # --- split back per video ---
         outputs: List[PipelineOutputs] = []
         for v, (s, e) in zip(per_video, slices):
@@ -503,12 +539,9 @@ class PipelineRunner:
             v_topics_df["chunk_index"] = range(len(v_topics_df))
             v_sentiments = sentiments_combined[s:e]
             v_rollup = self.sentiment_analyzer.aggregate(v_sentiments)
-            # Re-index people dict to per-video chunk indices (0-based)
-            v_people = {
-                i - s: names
-                for i, names in people_combined.items()
-                if s <= i < e
-            }
+            # Already per-video and 0-based: entities are detected during the
+            # per-video pass now, so there is no batch-wide dict to re-index.
+            v_people = (v["people"] or {}) if detect_people else {}
             outputs.append(
                 PipelineOutputs(
                     video_id=v["video_id"],
