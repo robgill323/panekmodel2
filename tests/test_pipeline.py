@@ -224,3 +224,39 @@ def test_metadata_fetch_logs_no_api_key(settings, cache_home, caplog, monkeypatc
     assert "AIzaSyLEAKED" not in caplog.text
     assert "key=REDACTED" in caplog.text
     assert isinstance(meta, dict)
+
+
+def test_retired_settings_are_announced_not_silently_ignored(monkeypatch, caplog):
+    """A formerly load-bearing env var must not vanish without a word."""
+    import logging as _logging
+
+    from panekmodel2.config import RETIRED_SETTINGS, warn_about_retired_settings
+
+    monkeypatch.setenv("GOOGLE_CREDENTIALS_FILE", "/tmp/creds.json")
+    with caplog.at_level(_logging.INFO):
+        found = warn_about_retired_settings()
+
+    assert found == ["GOOGLE_CREDENTIALS_FILE"]
+    assert "GOOGLE_CREDENTIALS_FILE is set" in caplog.text
+    assert "ignored" in caplog.text
+    assert "GOOGLE_TOKEN_FILE" in RETIRED_SETTINGS
+
+
+def test_no_notice_when_retired_settings_are_absent(monkeypatch, caplog):
+    import logging as _logging
+
+    from panekmodel2.config import warn_about_retired_settings
+
+    monkeypatch.delenv("GOOGLE_CREDENTIALS_FILE", raising=False)
+    monkeypatch.delenv("GOOGLE_TOKEN_FILE", raising=False)
+    with caplog.at_level(_logging.INFO):
+        assert warn_about_retired_settings() == []
+    assert "is set but" not in caplog.text
+
+
+def test_oauth_settings_are_gone_from_the_model():
+    from panekmodel2.config import Settings
+
+    fields = set(Settings().model_dump())
+    assert "google_credentials_file" not in fields
+    assert "google_token_file" not in fields

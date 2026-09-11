@@ -1,7 +1,7 @@
 evidence_bundle:
   artifact: src/panekmodel2/server/jobs.py
   produced_by: developer
-  worktree_ref: feature/cleanup-hardening@5920fa3
+  worktree_ref: feature/cleanup-hardening
   items:
     - id: E-1
       kind: test-run
@@ -25,10 +25,18 @@ evidence_bundle:
 
     - id: E-4
       kind: citation
-      ref: "src/panekmodel2/pipeline.py:177"
-      # redact_secrets — SEC-003. googleapiclient embeds the request URL, and
-      # therefore key=<API key>, in HttpError text; a quota error used to write
-      # a live credential to the log.
+      ref: "src/panekmodel2/logging_redaction.py:45"
+      # RedactingLogRecord — SEC-003. Scrubs the RENDERED message for every
+      # record from this package, so the fix covers log sites that do not
+      # exist yet rather than the two that happen to exist today.
+
+    - id: E-14
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests/test_logging_redaction.py -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+      # Drives the real logging machinery on four package loggers and asserts
+      # the key is absent from the CAPTURED OUTPUT, not that a helper exists.
 
     - id: E-5
       kind: citation
@@ -44,7 +52,7 @@ evidence_bundle:
 
     - id: E-7
       kind: citation
-      ref: "src/panekmodel2/server/static/app.js:1584"
+      ref: "src/panekmodel2/server/static/app.js:1588"
       # mountPlayer destroys the previous player — A-2. render() replaces
       # #screen.innerHTML, detaching the iframe, so every re-render of the
       # video page orphaned a player that kept its timers and network activity.
@@ -55,7 +63,19 @@ evidence_bundle:
 
     - id: E-9
       kind: human-attested
-      claim: "SEC-003 and the A-5 formula guard were mutation-tested, not merely asserted. Removing redact_secrets from both the log call and describe_failure turns tests/test_pipeline.py red on test_metadata_fetch_logs_no_api_key and test_describe_failure_redacts_unrecognized_errors, with the leaked key visible verbatim in the captured log; restoring it turns them green. The formula-injection tests cover =, +, -, @ and control-character-prefixed payloads, and assert that ordinary text and negative floats are left untouched."
+      claim: "Both hardening fixes were mutation-tested at three levels, not merely asserted. (1) Removing the central CSV guard fails 14 tests. (2) Narrowing the guard to chunk text only - the exact partial fix the reviewer warned would pass a naive test and still ship the hole - still fails 8 tests, so a partial fix cannot read as green here. (3) Making RedactingLogRecord.getMessage a pass-through fails 6 tests, with the API key visible verbatim in captured output. All pass on restore."
+
+    - id: E-15
+      kind: human-attested
+      claim: "The A-5 surface was measured, not assumed. A probe of all five formula triggers through every column of every export finds zero live injections and confirms the guard covers 9 export/column pairs - the 8 the reviewer enumerated plus video/topic_label_1, a generated per-topic column. The guard sits at the single CSV-writing choke point, so columns added later are covered by construction; a test pins the covered set so a regression is loud. Numeric cells are deliberately untouched, since a negative valence legitimately starts with a minus sign and must stay numeric."
+
+    - id: E-16
+      kind: human-attested
+      claim: "SEC-003's two sites were both verified, and the design was corrected after testing disproved the first attempt. The OAuth captions raise site is GONE - grepping transcript_fetcher.py for 'Captions list failed' and 'HttpError' returns nothing, because the tier was deleted rather than left with a redaction TODO. The surviving metadata site in pipeline.py is covered, along with the yt-dlp fallback warning and two other logger.warning(..., exc) sites. The first implementation was a logging.Filter on the package logger; a test proved filters do not apply to records propagating from child loggers such as panekmodel2.pipeline, so it would have been a false fix, and it also broke percent-interpolation by redacting the format string. Replaced with a log-record factory that redacts the rendered message, verified across four package loggers with third-party logging left untouched."
+
+    - id: E-17
+      kind: human-attested
+      claim: "The parked branch f85b58b is folded in rather than discarded: its forced-interleaving B-1 regression test (events instead of sleeps) is restored verbatim, and its thread-drain teardown is superseded by the A-11 fixture, which additionally asserts the pipeline lock was not left held. The branch is deleted. Its origin story is worth carrying: leaked daemon job threads from one test wrote the disk cache after a later test's Path.home patch was undone, which manufactured a PHANTOM CSV quoting failure in the exact area under review. to_csv was verified correct against adversarial text before anything was changed - the defect was test isolation, not the exporter."
 
     - id: E-10
       kind: human-attested

@@ -1,6 +1,6 @@
 [project]
 name = "panekmodel2"
-version = "0.1.0"
+version = "0.2.0"
 description = "YouTube transcript ingestion, topic modeling (BERTopic), and sentiment pipeline"
 authors = [{ name = "Your Name" }]
 requires-python = ">=3.10"

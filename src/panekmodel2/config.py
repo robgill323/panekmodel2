@@ -1,3 +1,4 @@
+import logging
 import os
 from functools import lru_cache
 from typing import List, Optional
@@ -5,14 +6,17 @@ from typing import List, Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+logger = logging.getLogger(__name__)
+
 
 class Settings(BaseSettings):
     youtube_api_key: Optional[str] = Field(
-        default=None, description="YouTube Data API key (used for metadata and captions where applicable)."
+        default=None,
+        description=(
+            "YouTube Data API key. Used ONLY to fetch video metadata; the API "
+            "cannot serve captions for videos you do not own."
+        ),
     )
-    # GOOGLE_CREDENTIALS_FILE / GOOGLE_TOKEN_FILE were removed with the OAuth
-    # captions tier. Leaving them in a .env is harmless — pydantic ignores
-    # unknown env vars — and nothing writes .youtube_token.json any more.
     whisper_model: str = Field(default="small", description="Whisper model size for ASR fallback.")
     use_whisper_fallback: bool = Field(
         default=False, description="Enable Whisper transcription when no captions/transcripts are found."
@@ -47,9 +51,29 @@ class Settings(BaseSettings):
         env_file_encoding = "utf-8"
 
 
+# Settings that used to do something and now do not. Silently ignoring an env
+# var that was previously load-bearing is the kind of quiet behaviour change
+# that costs someone an afternoon later, so say so once at startup.
+RETIRED_SETTINGS = {
+    "GOOGLE_CREDENTIALS_FILE": "the OAuth captions tier was removed in 0.2.0",
+    "GOOGLE_TOKEN_FILE": "the OAuth captions tier was removed in 0.2.0",
+}
+
+
+def warn_about_retired_settings() -> List[str]:
+    """Log any retired env var that is still set. Returns the names found."""
+    found = []
+    for name, why in RETIRED_SETTINGS.items():
+        if os.environ.get(name):
+            found.append(name)
+            logger.info("%s is set but %s; the setting is ignored.", name, why)
+    return found
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     settings = Settings()
+    warn_about_retired_settings()
     # Propagate HF token to env for libraries that read os.environ directly.
     if settings.hf_token:
         # Cover common env var names used by transformers/huggingface_hub/langchain.

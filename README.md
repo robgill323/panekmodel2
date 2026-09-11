@@ -66,6 +66,11 @@ Environment variables (or .env) via pydantic BaseSettings:
   Chunk size below.
 - `TOPIC_REDUCE_TO` (default 10; `0` disables topic reduction).
 
+Retired in 0.2.0: `GOOGLE_CREDENTIALS_FILE` and `GOOGLE_TOKEN_FILE`, which
+configured the OAuth captions tier. Leaving them in a `.env` is harmless — they
+are ignored — and the app logs one INFO line at startup saying so rather than
+letting a formerly load-bearing variable vanish silently.
+
 ## Notes
 
 - Whisper requires `ffmpeg` and `yt-dlp`. On macOS: `brew install ffmpeg`.
@@ -73,7 +78,10 @@ Environment variables (or .env) via pydantic BaseSettings:
   downloads to the *owner* of a video, so it could never work for third-party
   analysis; the code for it was removed rather than left as dead weight.
 - Topic modeling and Whisper depend on torch; ensure you have a compatible build for your hardware.
-- A batch runs at most 200 URLs.
+- A batch runs at most 200 URLs, and runs execute one at a time.
+- Credentials never reach the logs: records from this package are scrubbed of
+  `key=`, `access_token=` and similar query parameters before any handler
+  formats them, because Google API errors stringify to the full request URL.
 
 ## CLI commands
 

@@ -18,6 +18,7 @@ except Exception:
     _yt_dlp = None
 
 from .chunker import Chunk, chunk_segments
+from .logging_redaction import redact_secrets
 from .config import Settings, get_settings
 from .sentiment import SentimentAnalyzer, SentimentResult
 from .topic_model import TopicModeler
@@ -164,25 +165,6 @@ class MultiRunResult:
         return {o.video_id: o for o in self.outputs}
 
 
-# Query parameters whose values are credentials. Matched case-insensitively
-# against anything that looks like a URL query string in text we are about to
-# log or show.
-_SECRET_QUERY_PARAMS = ("key", "access_token", "token", "api_key", "apikey", "password")
-
-_SECRET_RE = re.compile(
-    r"(?i)\b(" + "|".join(_SECRET_QUERY_PARAMS) + r")=([^&\s\"'<>\\]+)"
-)
-
-
-def redact_secrets(value: object) -> str:
-    """Strip credential-bearing query parameters out of text before it is logged.
-
-    Errors from Google API clients quote the whole request URL, which carries
-    ``key=<API key>``. Logging that verbatim writes a live credential to disk.
-    """
-    return _SECRET_RE.sub(lambda m: f"{m.group(1)}=REDACTED", str(value))
-
-
 def describe_failure(exc: BaseException | None) -> str:
     """Turn a pipeline exception into a plain-language skip reason."""
     if exc is None:
@@ -282,7 +264,7 @@ class PipelineRunner:
                 # googleapiclient embeds the full request URL — including
                 # key=<API key> — in HttpError's text, so a routine quota
                 # error would otherwise print a live credential to the log.
-                logger.warning("YouTube API metadata fetch failed: %s", redact_secrets(exc))
+                logger.warning("YouTube API metadata fetch failed: %s", exc)
 
         # Fallback: use yt-dlp (no API key required)
         if _yt_dlp is not None:

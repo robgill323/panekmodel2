@@ -433,14 +433,23 @@ def test_concurrent_jobs_keep_their_own_topic_labels(settings, cache_home):
     The runner — and the TopicModeler inside it — is shared. Reading the
     keyword map off that runner after a run returned let a second run's fit
     overwrite it first, silently relabelling the first run's topics.
+
+    The interleaving is forced with events rather than sleeps: the first fit
+    parks until the second one has finished. If pipeline execution is NOT
+    serialized, job B overtakes and job A's post-run read returns B's
+    keywords — the defect, reproduced deterministically rather than by timing
+    luck. If it IS serialized, B cannot reach its fit, so A's wait simply
+    expires and the run proceeds; the wait can never deadlock.
     """
     import threading
 
-    started = threading.Event()
+    first_fit_started = threading.Event()
+    second_fit_done = threading.Event()
+    OVERTAKE_WINDOW = 2.0
+    seen = []
+    seen_lock = threading.Lock()
 
-    class SlowRunner(FakeRunner):
-        """Fit blocks until released, so the two runs genuinely overlap."""
-
+    class OverlappingRunner(FakeRunner):
         def __init__(self, job_settings):
             super().__init__(job_settings)
             self.corpus = None
@@ -450,30 +459,42 @@ def test_concurrent_jobs_keep_their_own_topic_labels(settings, cache_home):
                 # Whichever video this run is about — recorded on the SHARED
                 # modeler, exactly like the real one records self.model.
                 self.corpus = chunks[0].text.split()[0]
-                started.set()
-                time.sleep(0.25)
-                return real_fit(chunks, embeddings=embeddings)
+                with seen_lock:
+                    seen.append(self.corpus)
+                    is_first = len(seen) == 1
+                result = real_fit(chunks, embeddings=embeddings)
+                if is_first:
+                    first_fit_started.set()
+                    # Give the other job every chance to overtake us.
+                    second_fit_done.wait(timeout=OVERTAKE_WINDOW)
+                else:
+                    second_fit_done.set()
+                return result
 
             self.topic_modeler.fit = _fit
 
         def topic_keywords(self, top_n: int = 10):
             return {0: [f"keywords-describing-{self.corpus}"], 1: ["other"]}
 
-    shared = SlowRunner(settings)
+    shared = OverlappingRunner(settings)
     app = create_app(JobManager(runner_factory=lambda _s: shared))
 
-    with TestClient(app) as client:
-        job_a = start(client, [URL_A])
-        started.wait(timeout=5)
-        job_b = start(client, [URL_B])
-        for job_id in (job_a, job_b):
-            assert wait_for(client, job_id, timeout=30)["status"] == "done"
+    try:
+        with TestClient(app) as client:
+            job_a = start(client, [URL_A])
+            assert first_fit_started.wait(timeout=10), "job A never reached its fit"
+            job_b = start(client, [URL_B])
+            for job_id in (job_a, job_b):
+                assert wait_for(client, job_id, timeout=30)["status"] == "done"
 
-        labels_a = client.get(f"/api/runs/{job_a}/results").json()["topics"][0]["keywords"]
-        labels_b = client.get(f"/api/runs/{job_b}/results").json()["topics"][0]["keywords"]
+            labels_a = client.get(f"/api/runs/{job_a}/results").json()["topics"][0]["keywords"]
+            labels_b = client.get(f"/api/runs/{job_b}/results").json()["topics"][0]["keywords"]
+    finally:
+        second_fit_done.set()
 
     assert labels_a == [f"keywords-describing-{VID_A}"], "job A was relabelled by job B's fit"
     assert labels_b == [f"keywords-describing-{VID_B}"]
+    assert seen == [VID_A, VID_B], "both jobs should have fitted, in submission order"
 
 
 def test_second_job_reports_itself_as_queued(settings, cache_home):
@@ -710,4 +731,86 @@ def test_numeric_columns_stay_numeric():
     results["videos"][0]["chunks"][0]["valence"] = -0.42
     body = exports.to_csv(results, "combined")
     rows = list(csv.reader(io.StringIO(body)))
+    assert rows[1][rows[0].index("valence")] == "-0.42"
+
+
+# ── A-5, full surface: every text-bearing column in every export ────
+FORMULA_TRIGGERS = ["=cmd|'/c calc'!A1", "+1+1", "-2+3", "@SUM(A1:A9)", "\t=1+1", "\r\n=HYPERLINK(\"http://e\",\"x\")"]
+
+
+def _injectable_results(payload: str) -> dict:
+    """Put the payload in EVERY uploader-influenced field at once.
+
+    Titles, channel names, topic labels and keywords all derive from
+    transcript or uploader text. Two topics, so the video export's generated
+    topic_label_N columns are covered as well — those are easy to miss
+    because they are built in a loop.
+    """
+    return {
+        "settings": {"chunk_max_seconds": 30},
+        "run": {"id": "abcd1234"},
+        "topics": [
+            {"topic_id": i, "label": payload, "keywords": [payload, "k2"], "n_chunks": 1,
+             "share": 0.5, "n_videos": 1, "mean_valence": 0.0, "sd_valence": 0.0,
+             "controversy": "low"}
+            for i in (0, 1)
+        ],
+        "outlier": {"topic_id": -1, "n_chunks": 0, "share": 0.0, "mean_valence": 0.0},
+        "videos": [{"video_id": "v", "title": payload, "channel": payload, "url": "u",
+                    "duration_s": 1.0, "n_chunks": 1, "mean_valence": 0.0, "sd_valence": 0.0,
+                    "topic_mix": [{"topic_id": 0, "share": 1.0}],
+                    "chunks": [{"index": 0, "start": 0.0, "end": 1.0, "text": payload,
+                                "topic_id": 0, "topic_prob": 0.9, "topic_reassigned": False,
+                                "valence": -0.42, "sentiment_label": "positive",
+                                "sentiment_score": 0.9}]}],
+    }
+
+
+def live_injections(payload: str):
+    """Cells a spreadsheet would evaluate as a formula, across all exports."""
+    found = []
+    for kind in exports.EXPORT_KINDS:
+        rows = list(csv.reader(io.StringIO(exports.to_csv(_injectable_results(payload), kind))))
+        header = rows[0]
+        for row in rows[1:]:
+            for col, cell in zip(header, row):
+                if not isinstance(cell, str) or not cell:
+                    continue
+                # Numeric columns are legitimately allowed to start with "-".
+                try:
+                    float(cell)
+                    continue
+                except ValueError:
+                    pass
+                if cell.lstrip("\t\r\n").startswith(("=", "+", "-", "@")):
+                    found.append((kind, col))
+    return found
+
+
+@pytest.mark.parametrize("payload", FORMULA_TRIGGERS)
+def test_no_export_column_anywhere_is_injectable(payload):
+    assert live_injections(payload) == []
+
+
+def test_the_guard_actually_covers_the_whole_surface():
+    """Pin the covered surface so a new export column cannot quietly reopen it."""
+    rows = {kind: list(csv.reader(io.StringIO(exports.to_csv(_injectable_results("=1+1"), kind))))
+            for kind in exports.EXPORT_KINDS}
+    guarded = {
+        (kind, col)
+        for kind, data in rows.items()
+        for col, cell in zip(data[0], data[1])
+        if isinstance(cell, str) and cell.startswith("'=")
+    }
+    assert guarded == {
+        ("combined", "text"), ("combined", "video_title"), ("combined", "topic_label"),
+        ("video", "video_title"), ("video", "channel"),
+        ("video", "topic_label_0"), ("video", "topic_label_1"),
+        ("topic", "topic_label"), ("topic", "keywords"),
+    }
+
+
+def test_numbers_are_not_quoted_by_the_guard():
+    """Negative valences start with '-' and must stay numeric."""
+    rows = list(csv.reader(io.StringIO(exports.to_csv(_injectable_results("safe"), "combined"))))
     assert rows[1][rows[0].index("valence")] == "-0.42"
