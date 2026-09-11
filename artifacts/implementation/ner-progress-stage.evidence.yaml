@@ -1,7 +1,7 @@
 evidence_bundle:
   artifact: src/panekmodel2/server/jobs.py
   produced_by: developer
-  worktree_ref: feature/ner-progress-stage@82a50ab
+  worktree_ref: feature/ner-progress-stage@21cc07b
   items:
     - id: E-1
       kind: test-run
@@ -81,5 +81,9 @@ evidence_bundle:
       claim: "CACHE_VERSION 3 makes every pre-existing cache entry unreachable by key, so the first run after this change re-does transcript, embedding and sentiment work for every video. That is the intended invalidation path and is covered by a test, but the one-time cost on a large existing cache was not measured."
 
     - id: E-15
-      kind: assumed
-      claim: "The SPA renders whatever stages the API reports and was confirmed to have no hardcoded stage count, but the six-stage progress screen was not rendered in a browser for this change - there is no JS test harness, so no test would fail if the stage list displayed wrongly."
+      kind: human-attested
+      claim: "The six-stage progress screen was rendered in headless Chrome against a live server and inspected. All six stages appear in execution order with 'People & entities' between Sentiment and Topic modelling, each with a progress bar and a note. That rendering is what exposed the stale-counter defect fixed in this branch: every note read 0/5 on a finished run. There is still no JS test harness, so the rendering itself is not pinned by a test - only the API payload behind it is."
+
+    - id: E-16
+      kind: human-attested
+      claim: "The stale stage counters were a second dishonesty in the same surface, found by looking at the rendered screen rather than the payload. They were derived from per-URL outcome state written only after the run returns, so they never advanced during a run and were wrong at the end of one. Now driven by the per-video progress messages, with per-video stages closing at their true totals. Pinned by two tests that drive the message sequence directly, because polling the fake runner cannot catch it - it finishes between polls."
