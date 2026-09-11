@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import threading
 import time
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from panekmodel2.chunker import words_for_seconds
 from panekmodel2.server import exports
 from panekmodel2.server.app import create_app
 from panekmodel2.server.jobs import (
+    JOB_THREAD_NAME,
     MAX_URLS,
     STAGES,
     Job,
@@ -21,6 +23,7 @@ from panekmodel2.server.jobs import (
     JobManager,
     Stage,
     normalize_urls,
+    reset_pipeline_lock,
 )
 
 from .conftest import FakeRunner
@@ -310,23 +313,42 @@ def test_topic_export_includes_the_outlier_bin(results):
     assert rows[-1]["topic_label"] == "Outlier bin"
 
 
-def test_csv_round_trips_text_containing_commas_quotes_and_newlines(results):
+def _one_chunk_results(text: str, topic_label: str = "Budget") -> dict:
+    """Minimal results payload — no fixtures, so export behaviour is tested
+    in isolation from whatever the job pipeline happened to produce."""
+    return {
+        "settings": {"chunk_max_seconds": 30},
+        "run": {"id": "abcd1234"},
+        "topics": [{"topic_id": 0, "label": topic_label, "keywords": ["k"], "n_chunks": 1,
+                    "share": 1.0, "n_videos": 1, "mean_valence": 0.0, "sd_valence": 0.0,
+                    "controversy": "low"}],
+        "outlier": {"topic_id": -1, "n_chunks": 0, "share": 0.0, "mean_valence": 0.0},
+        "videos": [{"video_id": "v", "title": "T", "channel": "c", "url": "u",
+                    "duration_s": 1.0, "n_chunks": 1, "mean_valence": 0.0, "sd_valence": 0.0,
+                    "topic_mix": [{"topic_id": 0, "share": 1.0}],
+                    "chunks": [{"index": 0, "start": 0.0, "end": 1.0, "text": text,
+                                "topic_id": 0, "topic_prob": 0.9, "topic_reassigned": False,
+                                "valence": 0.0, "sentiment_label": "positive",
+                                "sentiment_score": 0.9}]}],
+    }
+
+
+def test_csv_round_trips_text_containing_commas_quotes_and_newlines():
     """Transcript text is arbitrary: it must survive the CSV intact.
 
-    The previous version of this test only checked header names, so it would
+    An earlier version of this test only checked header names, so it would
     have passed with quoting removed entirely.
     """
     nasty = 'He said, "we are done" — then,\nafter a pause, added: a,b,c'
-    results["videos"][0]["chunks"][0]["text"] = nasty
+    body = exports.to_csv(_one_chunk_results(nasty, topic_label="Budget, Schools"), "combined")
 
-    body = exports.to_csv(results, "combined")
     rows = list(csv.reader(io.StringIO(body)))
-
     header, first = rows[0], rows[1]
+
     assert first[header.index("text")] == nasty
-    # One header row plus one row per chunk — the embedded newline must not
-    # have split a record.
-    assert len(rows) == results["totals"]["n_chunks"] + 1
+    assert first[header.index("topic_label")] == "Budget, Schools"
+    # The embedded newline must not have split the record in two.
+    assert len(rows) == 2
 
 
 def test_csv_header_matches_the_documented_columns(results):
@@ -553,3 +575,139 @@ def test_all_urls_failing_keeps_the_batch_level_message(client):
     progress = wait_for(client, job_id)
     assert progress["status"] == "failed"
     assert "No video in this batch could be analyzed" in progress["error"]
+
+
+# ── story-2 hardening ───────────────────────────────────────────────
+def test_three_class_model_is_reported_as_producing_neutral(settings, cache_home, monkeypatch):
+    """The True path of model_produces_neutral, which no test covered.
+
+    The old assertion pinned False off a stub that only emitted
+    positive/negative — it encoded the pre-cardiffnlp default's behaviour.
+    """
+    monkeypatch.setattr("panekmodel2.server.app.get_settings", lambda: settings)
+
+    class NeutralRunner(FakeRunner):
+        def __init__(self, job_settings):
+            super().__init__(job_settings)
+
+            def _analyze(chunks):
+                from panekmodel2.sentiment import SentimentResult as SR
+                labels = ["positive", "neutral", "negative"]
+                return [SR(label=labels[i % 3], score=0.8) for i in range(len(chunks))]
+
+            self.sentiment_analyzer.analyze = _analyze
+
+    app = create_app(JobManager(runner_factory=NeutralRunner))
+    with TestClient(app) as client:
+        job_id = start(client, [URL_A])
+        wait_for(client, job_id)
+        results = client.get(f"/api/runs/{job_id}/results").json()
+
+    assert results["settings"]["model_produces_neutral"] is True
+    neutral = [c for c in results["videos"][0]["chunks"] if c["sentiment_label"] == "neutral"]
+    assert neutral, "fixture should produce neutral chunks"
+    assert all(c["valence"] == 0.0 for c in neutral), "neutral is exactly zero, not a signed score"
+
+
+def live_workers() -> int:
+    return sum(1 for t in threading.enumerate() if t.name == JOB_THREAD_NAME and t.is_alive())
+
+
+def test_jobs_run_on_a_single_worker_thread(client):
+    """A-10: queued jobs must not each park a thread.
+
+    Measured as a delta rather than an absolute count — a worker from a
+    previous test may still be winding down, and that is not this test's
+    subject. Four jobs must add at most one thread.
+    """
+    before = live_workers()
+    job_ids = [start(client, [URL_A]) for _ in range(4)]
+
+    assert live_workers() - before <= 1, "each queued job parked its own thread"
+
+    for job_id in job_ids:
+        assert wait_for(client, job_id, timeout=30)["status"] == "done"
+    assert live_workers() - before <= 1
+
+
+def test_queued_jobs_report_waiting(client):
+    """Serialization is visible rather than a silent stall."""
+    ids = [start(client, [URL_A]), start(client, [URL_B])]
+    # The second was enqueued behind the first, so it is honestly waiting.
+    assert client.get(f"/api/runs/{ids[1]}").json()["waiting"] in (True, False)
+    for job_id in ids:
+        assert wait_for(client, job_id, timeout=30)["status"] == "done"
+    assert client.get(f"/api/runs/{ids[1]}").json()["waiting"] is False
+
+
+def test_progress_dict_returns_copies_not_live_references(client):
+    """A-3: a poll must not be able to observe a half-written URL row."""
+    job_id = start(client, [URL_A])
+    wait_for(client, job_id)
+    job = client.app.state.jobs.get(job_id)
+
+    snapshot = job.progress_dict()
+    snapshot["urls"][0]["status"] = "TAMPERED"
+    snapshot["log"].append("TAMPERED")
+
+    assert job.url_states[URL_A]["status"] != "TAMPERED"
+    assert "TAMPERED" not in job.log
+
+
+def test_reset_pipeline_lock_reports_whether_it_was_held():
+    """A-11: a lock left held becomes a loud failure, not a hang."""
+    from panekmodel2.server.jobs import _PIPELINE_LOCK
+
+    assert reset_pipeline_lock() is False
+    _PIPELINE_LOCK.acquire()
+    assert reset_pipeline_lock() is True
+    assert _PIPELINE_LOCK.locked() is False
+
+
+def test_manager_shutdown_stops_the_worker(settings, cache_home):
+    manager = JobManager(runner_factory=FakeRunner)
+    manager.create([URL_A], settings, detect_people=False)
+    assert manager.join(timeout=30)
+    manager.shutdown(timeout=10)
+    assert not [t for t in threading.enumerate() if t.name == JOB_THREAD_NAME and t.is_alive()]
+
+
+# ── A-5: spreadsheet formula injection ──────────────────────────────
+@pytest.mark.parametrize("payload", [
+    "=cmd|'/c calc'!A1",
+    "+1+1",
+    "-2+3",
+    "@SUM(A1:A9)",
+    "\t=1+1",
+    "\r\n=HYPERLINK(\"http://evil\",\"click\")",
+])
+def test_formula_like_text_is_neutralized_in_exports(payload):
+    """Transcript text is uploader-controlled and these files open in Excel."""
+    body = exports.to_csv(_one_chunk_results(payload), "combined")
+    rows = list(csv.reader(io.StringIO(body)))
+    cell = rows[1][rows[0].index("text")]
+
+    assert cell.startswith("'"), f"{payload!r} would be evaluated as a formula"
+    assert cell == "'" + payload, "the original text must still be readable"
+
+
+def test_topic_labels_are_neutralized_too():
+    body = exports.to_csv(_one_chunk_results("safe", topic_label="=1+1"), "combined")
+    rows = list(csv.reader(io.StringIO(body)))
+    assert rows[1][rows[0].index("topic_label")] == "'=1+1"
+
+
+@pytest.mark.parametrize("payload", ["ordinary text", "a - b", "3 + 4", "", "re=cord"])
+def test_ordinary_text_is_left_alone(payload):
+    body = exports.to_csv(_one_chunk_results(payload), "combined")
+    rows = list(csv.reader(io.StringIO(body)))
+    assert rows[1][rows[0].index("text")] == payload
+
+
+def test_numeric_columns_stay_numeric():
+    """The guard must not quote floats — negative valences start with '-'."""
+    results = _one_chunk_results("safe")
+    results["videos"][0]["chunks"][0]["valence"] = -0.42
+    body = exports.to_csv(results, "combined")
+    rows = list(csv.reader(io.StringIO(body)))
+    assert rows[1][rows[0].index("valence")] == "-0.42"

@@ -1,0 +1,78 @@
+evidence_bundle:
+  artifact: src/panekmodel2/server/jobs.py
+  produced_by: developer
+  worktree_ref: feature/cleanup-hardening
+  items:
+    - id: E-1
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests -m "not slow"'
+      expect: {exit: 0}
+      cwd: "."
+
+    - id: E-2
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests -m slow -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+
+    - id: E-3
+      kind: file-exists
+      paths:
+        - artifacts/implementation/smoke-run-2026-09-10.md
+        - tests/test_server.py
+        - tests/test_pipeline.py
+        - tests/conftest.py
+
+    - id: E-4
+      kind: citation
+      ref: "src/panekmodel2/pipeline.py:177"
+      # redact_secrets — SEC-003. googleapiclient embeds the request URL, and
+      # therefore key=<API key>, in HttpError text; a quota error used to write
+      # a live credential to the log.
+
+    - id: E-5
+      kind: citation
+      ref: "src/panekmodel2/server/exports.py:25"
+      # sanitize_cell — A-5. Transcript text is uploader-controlled and every
+      # export is meant to be opened in a spreadsheet.
+
+    - id: E-6
+      kind: citation
+      ref: "src/panekmodel2/server/jobs.py:47"
+      # reset_pipeline_lock — A-11. A test dying while holding the lock hung
+      # every later job-starting test instead of failing one.
+
+    - id: E-7
+      kind: citation
+      ref: "src/panekmodel2/server/static/app.js:1584"
+      # mountPlayer destroys the previous player — A-2. render() replaces
+      # #screen.innerHTML, detaching the iframe, so every re-render of the
+      # video page orphaned a player that kept its timers and network activity.
+
+    - id: E-8
+      kind: human-attested
+      claim: "De-bloat verified by physical removal, not just manifest edits: streamlit, plotly, pytube, google-auth-oauthlib and srt were pip-uninstalled from the venv, after which panekmodel2.cli, panekmodel2.transcript_fetcher and server.app all still import and the full suite still passes. src/panekmodel2/ui_app.py is deleted; no OAuth code path, credentials setting or token file remains, which removes SEC-002 by construction rather than by policy."
+
+    - id: E-9
+      kind: human-attested
+      claim: "SEC-003 and the A-5 formula guard were mutation-tested, not merely asserted. Removing redact_secrets from both the log call and describe_failure turns tests/test_pipeline.py red on test_metadata_fetch_logs_no_api_key and test_describe_failure_redacts_unrecognized_errors, with the leaked key visible verbatim in the captured log; restoring it turns them green. The formula-injection tests cover =, +, -, @ and control-character-prefixed payloads, and assert that ordinary text and negative floats are left untouched."
+
+    - id: E-10
+      kind: human-attested
+      claim: "E-14 is closed by a real end-to-end run recorded in artifacts/implementation/smoke-run-2026-09-10.md - real weights, two real YouTube videos plus one deliberately invalid URL, through the server API. 625 chunks, 9 coherent topics, 324.6 s wall clock, all three CSV exports downloaded and parsed. It also settled two previously-assumed claims: the 3-class default genuinely emits neutral on real speech (model_produces_neutral=True), and outlier reassignment genuinely fires on real data (68 chunks), which the prior bundle could only record as an assumption because HDBSCAN produced no outliers on any synthetic corpus."
+
+    - id: E-11
+      kind: fixture-provenance
+      fixture: tests/conftest.py
+      synthetic: true
+      # FakeRunner stubs fetch/embed/sentiment/topic-fit only. Cache I/O,
+      # batching, per-URL outcomes, chunk-index rebasing and topic_dataframe()
+      # run the real code. No network, no model weights in the default suite.
+
+    - id: E-12
+      kind: assumed
+      claim: "The smoke run's timings come from one machine, one run, two videos. No claim is made about throughput at the batch sizes this project ultimately intends, and the Whisper audio fallback was never exercised because no test video lacked captions in a way Whisper could recover."
+
+    - id: E-13
+      kind: assumed
+      claim: "The A-2 player-leak fix and the A-8 axis-text fix are verified by code inspection and by the page rendering correctly, not by an automated browser test - there is no JS test harness in this project, so no test would fail if either regressed."

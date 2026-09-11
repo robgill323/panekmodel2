@@ -10,12 +10,9 @@ class Settings(BaseSettings):
     youtube_api_key: Optional[str] = Field(
         default=None, description="YouTube Data API key (used for metadata and captions where applicable)."
     )
-    google_credentials_file: Optional[str] = Field(
-        default=None, description="Path to OAuth client credentials JSON for official captions."
-    )
-    google_token_file: str = Field(
-        default=".youtube_token.json", description="Path to store OAuth token for offline reuse."
-    )
+    # GOOGLE_CREDENTIALS_FILE / GOOGLE_TOKEN_FILE were removed with the OAuth
+    # captions tier. Leaving them in a .env is harmless — pydantic ignores
+    # unknown env vars — and nothing writes .youtube_token.json any more.
     whisper_model: str = Field(default="small", description="Whisper model size for ASR fallback.")
     use_whisper_fallback: bool = Field(
         default=False, description="Enable Whisper transcription when no captions/transcripts are found."

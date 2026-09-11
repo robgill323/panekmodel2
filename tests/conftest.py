@@ -7,6 +7,9 @@ model behaviour are marked ``slow``.
 
 from __future__ import annotations
 
+import threading
+import time
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -16,7 +19,29 @@ from panekmodel2.chunker import Chunk
 from panekmodel2.config import Settings
 from panekmodel2.pipeline import PipelineRunner
 from panekmodel2.sentiment import SentimentResult
+from panekmodel2.server.jobs import JOB_THREAD_NAME, reset_pipeline_lock
 from panekmodel2.transcript_fetcher import TranscriptSegment
+
+
+@pytest.fixture(autouse=True)
+def clean_pipeline_state():
+    """Keep one test's background work from bleeding into the next.
+
+    Job workers are daemon threads that outlive the test that started them. A
+    leftover worker writes the disk cache after that test's ``Path.home`` patch
+    is undone, and can still hold the process-wide pipeline lock — which turns
+    an unrelated later test into a hang rather than a failure. Drain first,
+    then release the lock if anything died holding it.
+    """
+    yield
+    deadline = time.time() + 30.0
+    for thread in list(threading.enumerate()):
+        if thread.name == JOB_THREAD_NAME and thread.is_alive():
+            thread.join(timeout=max(0.0, deadline - time.time()))
+    leaked = [t.name for t in threading.enumerate() if t.name == JOB_THREAD_NAME and t.is_alive()]
+    was_locked = reset_pipeline_lock()
+    assert not leaked, f"job worker outlived its test: {leaked}"
+    assert not was_locked, "a test finished while still holding the pipeline lock"
 
 
 @pytest.fixture
@@ -70,7 +95,7 @@ class FakeRunner(PipelineRunner):
         self.embed_calls = 0
         self.fetch_calls: list[str] = []
 
-        def _fetch(video_id: str, prefer_official: bool = True):
+        def _fetch(video_id: str):
             self.fetch_calls.append(video_id)
             if video_id in self.fail_ids:
                 raise RuntimeError("No transcript available for this video")

@@ -7,10 +7,12 @@ matching the app's session-scoped promise: closing it discards the results.
 from __future__ import annotations
 
 import logging
+import queue
 import re
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
@@ -38,6 +40,25 @@ MAX_URLS = 200
 # pipeline execution runs at a time in this process. Queueing is the honest
 # behaviour for a single-user local instrument.
 _PIPELINE_LOCK = threading.Lock()
+
+JOB_THREAD_NAME = "panek-job-worker"
+
+
+def reset_pipeline_lock() -> bool:
+    """Force-release the pipeline lock. Returns True if it was actually held.
+
+    A test that dies while holding this lock does not fail one test — it hangs
+    every later test that starts a job, with nothing pointing at the cause.
+    Resetting between tests turns that silent hang into a loud failure.
+    """
+    if _PIPELINE_LOCK.locked():
+        try:
+            _PIPELINE_LOCK.release()
+        except RuntimeError:
+            # Already released between the check and here; nothing to do.
+            return False
+        return True
+    return False
 
 
 class JobError(Exception):
@@ -84,6 +105,18 @@ class Job:
     def stage(self, key: str) -> Stage:
         return next(s for s in self.stages if s.key == key)
 
+    @contextmanager
+    def mutate(self):
+        """Hold the job lock while changing job state.
+
+        Every write goes through here so the lock actually serializes readers
+        against the writer. Previously it was taken only in progress_dict(),
+        which serialized readers against each other and never against the
+        worker — it implied safety it did not provide.
+        """
+        with self._lock:
+            yield self
+
     def progress_dict(self) -> dict:
         with self._lock:
             return {
@@ -96,9 +129,12 @@ class Job:
                 "finished_at": self.finished_at,
                 "elapsed_s": round((self.finished_at or time.time()) - (self.started_at or self.created_at), 1),
                 "stages": [s.as_dict() for s in self.stages],
-                "urls": [self.url_states[u] for u in self.urls],
+                # Copies, not live references: these dicts were previously
+                # JSON-encoded after the lock was released, so a poll could
+                # serialize a half-updated URL row.
+                "urls": [dict(self.url_states[u]) for u in self.urls],
                 "counts": self._counts(),
-                "log": self.log[-40:],
+                "log": list(self.log[-40:]),
             }
 
     def _counts(self) -> dict:
@@ -125,12 +161,59 @@ def normalize_urls(raw: List[str]) -> List[str]:
 
 
 class JobManager:
-    """Creates and tracks run jobs. One instance per app."""
+    """Creates and tracks run jobs. One instance per app.
+
+    Jobs run on a single worker thread fed by a queue. Pipeline execution was
+    already serialized — the shared TopicModeler cannot survive overlapping
+    fits — but it was serialized by parking a thread per job on a lock, so a
+    researcher pasting several batches accumulated blocked threads for no
+    benefit. One worker, one queue: same ordering guarantee, bounded threads.
+    """
 
     def __init__(self, runner_factory: Callable[[Settings], object] = get_runner):
         self._jobs: Dict[str, Job] = {}
+        self._queue: "queue.Queue[Optional[Job]]" = queue.Queue()
+        self._worker: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._runner_factory = runner_factory
+
+    def _ensure_worker(self) -> None:
+        """Start the worker on first use, so an idle manager costs no thread."""
+        with self._lock:
+            if self._worker is None or not self._worker.is_alive():
+                self._worker = threading.Thread(
+                    target=self._work, name=JOB_THREAD_NAME, daemon=True
+                )
+                self._worker.start()
+
+    def _work(self) -> None:
+        while True:
+            job = self._queue.get()
+            try:
+                if job is None:  # shutdown sentinel
+                    return
+                self._execute(job)
+            finally:
+                self._queue.task_done()
+
+    def join(self, timeout: float = 30.0) -> bool:
+        """Wait until every queued job has finished. True if the queue drained."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._queue.unfinished_tasks == 0:
+                return True
+            time.sleep(0.01)
+        return self._queue.unfinished_tasks == 0
+
+    def shutdown(self, timeout: float = 10.0) -> None:
+        """Stop the worker once the queue drains. Safe to call more than once."""
+        with self._lock:
+            worker = self._worker
+            self._worker = None
+        if worker is None or not worker.is_alive():
+            return
+        self._queue.put(None)
+        worker.join(timeout=timeout)
 
     def get(self, job_id: str) -> Job:
         with self._lock:
@@ -170,7 +253,11 @@ class JobManager:
             }
         with self._lock:
             self._jobs[job.id] = job
-        threading.Thread(target=self._execute, args=(job,), daemon=True).start()
+        # Anything not at the head of the queue is honestly "waiting", so the
+        # progress screen can say so instead of showing a stalled "running".
+        job.waiting = self._queue.unfinished_tasks > 0
+        self._ensure_worker()
+        self._queue.put(job)
         return job
 
     # ---- execution -----------------------------------------------------
@@ -185,19 +272,23 @@ class JobManager:
             def on_progress(message: str) -> None:
                 self._on_progress(job, message)
 
-            # Wait our turn if another run is mid-pipeline, and say so rather
-            # than sitting on a "running" label that is doing nothing.
+            # The worker already serializes this manager's jobs. The lock still
+            # guards the case the worker cannot see: another JobManager in the
+            # same process sharing a runner, which is exactly what the test
+            # suite does.
             acquired = _PIPELINE_LOCK.acquire(blocking=False)
             if not acquired:
-                job.waiting = True
+                with job.mutate():
+                    job.waiting = True
                 self._mark_stage(
                     job, "fetch", "queued", note="waiting for another run to finish"
                 )
                 job.log.append("Queued behind another run — one pipeline runs at a time.")
                 _PIPELINE_LOCK.acquire()
                 acquired = True
-                job.waiting = False
 
+            with job.mutate():
+                job.waiting = False
             self._mark_stage(job, "fetch", "running")
             multi = runner.run_multi(
                 job.urls, progress=on_progress, detect_people=job.detect_people

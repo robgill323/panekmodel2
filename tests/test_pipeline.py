@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import pytest
 
+from panekmodel2 import pipeline as pipeline_module
+from panekmodel2.config import Settings
 from panekmodel2.pipeline import (
     CACHE_ENTRY_KEYS,
+    PipelineRunner,
     VideoCache,
     describe_failure,
     extract_video_id,
+    redact_secrets,
 )
 
 from .conftest import FakeRunner
@@ -160,3 +164,63 @@ def test_describe_failure_on_bad_url():
 @pytest.fixture
 def fake_runner_with_failure(settings, cache_home):
     return FakeRunner(settings, fail_ids={"b" * 11})
+
+
+# ── SEC-003: credentials must never reach the log or the UI ─────────
+@pytest.mark.parametrize("text,expected_absent", [
+    ("https://youtube.googleapis.com/youtube/v3/videos?id=x&key=AIzaSyREALKEY123", "AIzaSyREALKEY123"),
+    ("returned 403 ... ?part=snippet&key=SECRET&alt=json", "SECRET"),
+    ("access_token=ya29.LIVE_TOKEN expired", "ya29.LIVE_TOKEN"),
+    ("KEY=UpperCaseSecret", "UpperCaseSecret"),
+])
+def test_redact_secrets_removes_credentials(text, expected_absent):
+    cleaned = redact_secrets(text)
+    assert expected_absent not in cleaned
+    assert "REDACTED" in cleaned
+
+
+def test_redact_secrets_keeps_the_rest_of_the_message():
+    cleaned = redact_secrets("quotaExceeded for project 42 ?key=AIzaSyABC&part=snippet")
+    assert "quotaExceeded for project 42" in cleaned
+    assert "part=snippet" in cleaned
+
+
+def test_redact_secrets_leaves_innocent_text_alone():
+    assert redact_secrets("the monkey=wrench fell") == "the monkey=wrench fell"
+    assert redact_secrets("no secrets here") == "no secrets here"
+
+
+def test_redact_secrets_accepts_an_exception():
+    exc = RuntimeError("HttpError 403 ... &key=AIzaSyLEAKED")
+    assert "AIzaSyLEAKED" not in redact_secrets(exc)
+
+
+def test_describe_failure_redacts_unrecognized_errors():
+    """Unknown failures fall through verbatim to the UI and the exports."""
+    exc = RuntimeError("something odd happened: https://api?key=AIzaSyLEAKED")
+    reason = describe_failure(exc)
+    assert "AIzaSyLEAKED" not in reason
+    assert "key=REDACTED" in reason
+
+
+def test_metadata_fetch_logs_no_api_key(settings, cache_home, caplog, monkeypatch):
+    """The real leak path: googleapiclient puts the URL in HttpError's text."""
+    import logging as _logging
+
+    runner = FakeRunner(Settings(**{**settings.model_dump(), "youtube_api_key": "AIzaSyLEAKED"}))
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError(
+            "HttpError 403 when requesting "
+            "https://youtube.googleapis.com/youtube/v3/videos?id=x&key=AIzaSyLEAKED returned quotaExceeded"
+        )
+
+    monkeypatch.setattr(pipeline_module, "build", _boom)
+    # Keep the yt-dlp fallback offline: without this the test reaches YouTube.
+    monkeypatch.setattr(pipeline_module, "_yt_dlp", None)
+    with caplog.at_level(_logging.WARNING):
+        meta = PipelineRunner.fetch_metadata(runner, "a" * 11)
+
+    assert "AIzaSyLEAKED" not in caplog.text
+    assert "key=REDACTED" in caplog.text
+    assert isinstance(meta, dict)

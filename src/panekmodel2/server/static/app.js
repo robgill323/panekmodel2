@@ -273,28 +273,50 @@ function throughline(video, size, opts) {
     `<g clip-path="url(#${pre}-cd)"><path d="${area}" fill="${negC}" fill-opacity=".82"/></g>` +
     `<line x1="0" y1="${mid}" x2="${W}" y2="${mid}" stroke="currentColor" stroke-opacity=".28" stroke-width="${size === 'micro' ? 0.8 : 1}"/>`;
 
+  const plotH = cfg.lane + cfg.gap + cfg.rib;
   let extras = '';
   if (cfg.axis) {
     const step = dur / 6;
     for (let i = 0; i <= 6; i++) {
-      const t = i * step;
-      const anchor = i === 0 ? 'start' : (i === 6 ? 'end' : 'middle');
-      extras += `<line x1="${x(t)}" y1="${H - cfg.axis + 2}" x2="${x(t)}" y2="${H - cfg.axis + 7}" stroke="currentColor" stroke-opacity=".35"/>`;
-      extras += `<text x="${clamp(x(t), 14, W - 24)}" y="${H - 4}" text-anchor="${anchor}" font-size="12" font-family="var(--mono)" fill="currentColor" fill-opacity=".55">${fmtT(t)}</text>`;
+      extras += `<line x1="${x(i * step)}" y1="${plotH - 5}" x2="${x(i * step)}" y2="${plotH}" stroke="currentColor" stroke-opacity=".35"/>`;
     }
-    extras += `<text x="6" y="${cfg.lane + cfg.gap + 11}" font-size="11" font-family="var(--mono)" fill="${posC}">+1</text>`;
-    extras += `<text x="6" y="${cfg.lane + cfg.gap + cfg.rib - 3}" font-size="11" font-family="var(--mono)" fill="${negC}">−1</text>`;
   }
   if (opts.interactive) {
-    const bottom = cfg.lane + cfg.gap + cfg.rib;
-    extras += `<line class="tl-hover" x1="-10" y1="0" x2="-10" y2="${bottom}" stroke="currentColor" stroke-opacity=".4" stroke-dasharray="3 3"/>`;
-    extras += `<g class="tl-playhead" transform="translate(0,0)"><line x1="0" y1="0" x2="0" y2="${bottom}" stroke="currentColor" stroke-width="1.6"/><circle cx="0" cy="0" r="4" fill="currentColor"/></g>`;
+    extras += `<line class="tl-hover" x1="-10" y1="0" x2="-10" y2="${plotH}" stroke="currentColor" stroke-opacity=".4" stroke-dasharray="3 3"/>`;
+    extras += `<g class="tl-playhead" transform="translate(0,0)"><line x1="0" y1="0" x2="0" y2="${plotH}" stroke="currentColor" stroke-width="1.6"/><circle cx="0" cy="0" r="4" fill="currentColor"/></g>`;
   }
 
-  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"
-    style="width:100%;height:${cfg.px}px;display:block;color:var(--ink);cursor:${opts.interactive ? 'crosshair' : 'default'}"
+  /* The lane and ribbon are meant to stretch to the container width, which is
+     what preserveAspectRatio="none" does — but that same non-uniform scale
+     squashes or stretches any text inside the SVG depending on viewport width.
+     Labels therefore live in HTML beside it, at natural size. */
+  const svg = `<svg viewBox="0 0 ${W} ${plotH}" preserveAspectRatio="none"
+    style="width:100%;height:${cfg.px - cfg.axis}px;display:block;color:var(--ink);cursor:${opts.interactive ? 'crosshair' : 'default'}"
     ${opts.interactive ? 'data-tl-interactive="1" role="slider" tabindex="0" aria-label="Seek video" aria-valuemin="0" aria-valuemax="' + Math.round(dur) + '" aria-valuenow="' + Math.round(S.t) + '"' : 'aria-hidden="true"'}>
     <defs>${defs}</defs><g>${lane}</g><g>${ribbon}</g><g>${extras}</g></svg>`;
+
+  if (!cfg.axis) return svg;
+
+  const ticks = Array.from({ length: 7 }, (_, i) => {
+    const pctX = (i / 6) * 100;
+    const align = i === 0 ? 'left:0;text-align:left'
+      : i === 6 ? 'right:0;text-align:right'
+        : `left:${pctX}%;transform:translateX(-50%)`;
+    return `<span class="tl-tick" style="${align}">${fmtT((i / 6) * dur)}</span>`;
+  }).join('');
+
+  // Percentages are of the plot box, which matches the SVG exactly — the axis
+  // row sits outside it, so it cannot push the ±1 markers off the ribbon.
+  const ribTop = ((cfg.lane + cfg.gap) / plotH) * 100;
+  const ribBottom = 100 - ribTop - (cfg.rib / plotH) * 100;
+  return `<div class="tl-frame">
+    <div class="tl-plot">
+      ${svg}
+      <span class="tl-ybound" style="top:${ribTop}%;color:${posC}">+1</span>
+      <span class="tl-ybound" style="bottom:${ribBottom}%;color:${negC}">−1</span>
+    </div>
+    <div class="tl-axis" style="height:${cfg.axis}px">${ticks}</div>
+  </div>`;
 }
 
 // ── nav & chrome ────────────────────────────────────────────────────
@@ -1529,6 +1551,17 @@ let player = null;
 let playerVideoId = null;
 let ytLoading = false;
 
+/* getIframe() throws on a destroyed player, so probing it must not be the
+   thing that breaks a re-render. */
+function safeIframe(instance) {
+  try {
+    const el = instance.getIframe();
+    return el && el.isConnected !== false ? el : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function loadYT() {
   if (window.YT && window.YT.Player) return Promise.resolve(true);
   if (ytLoading) return ytLoading;
@@ -1543,15 +1576,35 @@ function loadYT() {
   return ytLoading;
 }
 
+function removeFallback() {
+  const fb = $('#player-fallback');
+  if (fb) fb.remove();
+}
+
+/* render() replaces #screen.innerHTML, which detaches the existing iframe. Any
+   re-render of the video page — a theme toggle, a legend click, the excerpt
+   toggle — therefore has to either re-adopt that iframe or destroy it. Leaving
+   it behind orphans a player that keeps its own timers and network activity. */
 async function mountPlayer() {
   const v = currentVideo();
   const wrap = $('#player-wrap');
   if (!v || !wrap) return;
-  if (player && playerVideoId === v.video_id && document.body.contains(player.getIframe && player.getIframe())) {
-    wrap.appendChild(player.getIframe());
-    $('#player-fallback').remove();
+
+  const iframe = player && player.getIframe ? safeIframe(player) : null;
+  if (player && playerVideoId === v.video_id && iframe) {
+    // Same video, still-valid player: re-adopt the iframe into the new DOM.
+    wrap.appendChild(iframe);
+    removeFallback();
     return;
   }
+  if (player) {
+    // Different video, or a player whose iframe is gone: tear it down before
+    // building another, or its timers outlive it.
+    try { player.destroy(); } catch (_) { /* already gone */ }
+    player = null;
+    playerVideoId = null;
+  }
+
   const ok = await loadYT();
   if (!ok || !window.YT || !window.YT.Player) return; // fallback text stays
   const host = document.createElement('div');
@@ -1562,8 +1615,7 @@ async function mountPlayer() {
     events: {
       onReady: () => {
         playerVideoId = v.video_id;
-        const fb = $('#player-fallback');
-        if (fb) fb.remove();
+        removeFallback();
         if (S.t) player.seekTo(S.t, true);
       },
       onStateChange: (e) => {

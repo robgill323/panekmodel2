@@ -7,6 +7,7 @@ authentication, and it must not be reachable from the network by accident.
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional
 
@@ -64,8 +65,16 @@ def _resolve_settings(overrides: RunSettings) -> Settings:
 
 
 def create_app(manager: JobManager | None = None) -> FastAPI:
-    app = FastAPI(title="Throughline", version="2.0", docs_url="/api/docs")
-    app.state.jobs = manager or JobManager()
+    jobs = manager or JobManager()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        yield
+        # Stop the job worker so the process can exit promptly.
+        jobs.shutdown()
+
+    app = FastAPI(title="Throughline", version="2.0", docs_url="/api/docs", lifespan=lifespan)
+    app.state.jobs = jobs
 
     @app.get("/api/health")
     def health() -> dict:

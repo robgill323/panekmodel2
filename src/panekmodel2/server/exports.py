@@ -12,6 +12,29 @@ from typing import Dict, List
 
 EXPORT_KINDS = ("combined", "video", "topic")
 
+# Excel, Sheets and LibreOffice treat a cell starting with any of these as a
+# formula. Transcript text and topic labels are uploader-controlled, and this
+# tool's entire output is meant to be opened in a spreadsheet, so a chunk that
+# happens to start "=" must not become executable on open.
+_FORMULA_TRIGGERS = ("=", "+", "-", "@")
+# Leading control characters are stripped by spreadsheets before the trigger
+# check, so they can smuggle a formula past a naive first-character test.
+_FORMULA_STRIPPED = ("\t", "\r", "\n")
+
+
+def sanitize_cell(value):
+    """Neutralize spreadsheet formula injection, leaving the text readable.
+
+    Prefixes a single quote, which spreadsheets consume as "treat as text".
+    Non-strings pass through untouched so numeric columns stay numeric.
+    """
+    if not isinstance(value, str) or not value:
+        return value
+    probe = value.lstrip("".join(_FORMULA_STRIPPED))
+    if probe.startswith(_FORMULA_TRIGGERS):
+        return "'" + value
+    return value
+
 
 def _topic_lookup(results: dict) -> Dict[int, dict]:
     return {t["topic_id"]: t for t in results["topics"]}
@@ -126,7 +149,9 @@ def to_csv(results: dict, kind: str) -> str:
                 fieldnames.append(key)
     writer = csv.DictWriter(buf, fieldnames=fieldnames, lineterminator="\n")
     writer.writeheader()
-    writer.writerows(rows)
+    writer.writerows(
+        {key: sanitize_cell(value) for key, value in row.items()} for row in rows
+    )
     return buf.getvalue()
 
 

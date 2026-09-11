@@ -403,6 +403,20 @@ p { margin: 0; }
 .stack-bar { display: flex; height: 18px; border-radius: 3px; overflow: hidden; background: var(--sunk); }
 .stack-bar > span { display: block; height: 100%; }
 
+/* Axis labels live outside the stretched SVG so they keep their proportions
+   at any viewport width. */
+.tl-frame { position: relative; }
+.tl-plot { position: relative; }
+.tl-axis { position: relative; width: 100%; }
+.tl-axis .tl-tick {
+  position: absolute; top: 2px; font: 400 12px var(--mono);
+  color: var(--ink3); white-space: nowrap;
+}
+.tl-ybound {
+  position: absolute; left: 6px; font: 400 11px var(--mono);
+  line-height: 1; pointer-events: none;
+}
+
 .tl-tooltip {
   position: fixed; z-index: 60; min-width: 260px; max-width: 330px;
   background: var(--surface); border: 1px solid var(--line2); border-radius: 4px;

@@ -1,20 +1,11 @@
-import io
 import logging
 import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import List
 
-import srt
 import certifi
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaIoBaseDownload
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from pytube import YouTube
 
 try:
     import yt_dlp  # type: ignore
@@ -43,25 +34,18 @@ class TranscriptSegment:
 
 
 class TranscriptFetcher:
-    """Fetch transcripts via official captions, public transcripts, or Whisper fallback."""
+    """Fetch transcripts from public transcript tracks, or Whisper audio fallback.
 
-    scopes = ["https://www.googleapis.com/auth/youtube.readonly"]
+    The YouTube Data API caption-download tier was removed: it requires OAuth
+    *ownership* of the video, so it could never serve third-party analysis,
+    which is this tool's entire use case.
+    """
 
     def __init__(self, settings: Settings):
         self.settings = settings
 
-    def fetch(self, video_id: str, prefer_official: bool = True) -> List[TranscriptSegment]:
+    def fetch(self, video_id: str) -> List[TranscriptSegment]:
         errors = []
-
-        if prefer_official and self.settings.google_credentials_file:
-            try:
-                captions = self._fetch_official_captions(video_id)
-                if captions:
-                    logger.info("Using official captions")
-                    return captions
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Official captions failed: %s", exc)
-                errors.append(exc)
 
         try:
             public = self._fetch_public_transcript(video_id)
@@ -112,49 +96,6 @@ class TranscriptFetcher:
                 segments.append(TranscriptSegment(text=text, start=start, duration=duration))
         return segments
 
-    def _fetch_official_captions(self, video_id: str) -> List[TranscriptSegment]:
-        youtube = self._youtube_client()
-        if youtube is None:
-            raise RuntimeError("Google credentials not configured")
-
-        try:
-            response = youtube.captions().list(part="id, snippet", videoId=video_id).execute()
-        except HttpError as exc:  # noqa: BLE001
-            raise RuntimeError(f"Captions list failed: {exc}") from exc
-
-        items = response.get("items", [])
-        if not items:
-            raise RuntimeError("No caption tracks found")
-
-        # Prefer English
-        caption_id = None
-        for item in items:
-            lang = item.get("snippet", {}).get("language")
-            if lang and lang.startswith("en"):
-                caption_id = item.get("id")
-                break
-        if caption_id is None:
-            caption_id = items[0].get("id")
-
-        if caption_id is None:
-            raise RuntimeError("Caption id missing")
-
-        request = youtube.captions().download(id=caption_id, tfmt="srt")
-        fh = io.BytesIO()
-        downloader = MediaIoBaseDownload(fh, request)
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
-        fh.seek(0)
-        srt_body = fh.read().decode("utf-8", errors="replace")
-
-        subtitles = list(srt.parse(srt_body))
-        segments = [
-            TranscriptSegment(text=sub.content.strip(), start=sub.start.total_seconds(), duration=sub.duration.total_seconds())
-            for sub in subtitles
-        ]
-        return segments
-
     def _fetch_whisper(self, video_id: str) -> List[TranscriptSegment]:
         import whisper  # local import to avoid heavy load if unused
 
@@ -191,32 +132,7 @@ class TranscriptFetcher:
                 downloaded = Path(ydl.prepare_filename(info))
                 if downloaded.exists():
                     return downloaded
-        yt = YouTube(url)
-        stream = yt.streams.filter(only_audio=True).first()
-        if stream is None:
-            raise RuntimeError("No audio stream available")
-        out_file = stream.download(output_path=str(tmpdir))
-        return Path(out_file)
-
-    def _youtube_client(self):
-        cred_path = self.settings.google_credentials_file
-        if not cred_path:
-            return None
-        cred_file = Path(cred_path)
-        if not cred_file.exists():
-            raise RuntimeError(f"Credentials file not found: {cred_file}")
-
-        creds: Optional[Credentials] = None
-        token_path = Path(self.settings.google_token_file)
-        if token_path.exists():
-            creds = Credentials.from_authorized_user_file(str(token_path), self.scopes)
-
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(str(cred_file), self.scopes)
-                creds = flow.run_local_server(port=0)
-            token_path.write_text(creds.to_json())
-
-        return build("youtube", "v3", credentials=creds, cache_discovery=False)
+            raise RuntimeError(f"yt-dlp downloaded no audio file for {url}")
+        raise RuntimeError(
+            "yt-dlp is required for the Whisper audio fallback but is not installed."
+        )
