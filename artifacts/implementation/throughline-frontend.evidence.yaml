@@ -1,7 +1,7 @@
 evidence_bundle:
   artifact: src/panekmodel2/server/static/app.js
   produced_by: developer
-  worktree_ref: feature/throughline-frontend
+  worktree_ref: feature/throughline-frontend@10fe0f83ef0f8ce390d87db4faa1cefd894122a1
   items:
     - id: E-1
       kind: test-run
@@ -101,13 +101,39 @@ evidence_bundle:
       # sentiment_model default is now the 3-class cardiffnlp twitter-roberta;
       # siebert stays selectable and is labelled binary (addendum §4).
 
+    - id: E-22
+      kind: citation
+      ref: "src/panekmodel2/server/jobs.py:40"
+      # _PIPELINE_LOCK — one pipeline execution at a time per process. Review
+      # blocker B-1: concurrent fits corrupt the shared TopicModeler, and a
+      # second job's fit relabelled the first job's topics.
+
+    - id: E-23
+      kind: citation
+      ref: "src/panekmodel2/pipeline.py:142"
+      # MultiRunResult.keywords — captured during the run's own fit, so jobs.py
+      # never reads topic labels back off the shared runner (B-1, part two).
+
+    - id: E-24
+      kind: citation
+      ref: "src/panekmodel2/server/static/app.js:17"
+      # The SPA's settings object deliberately omits chunk_max_words. Review
+      # blocker B-2: posting a concrete 200 suppressed the server-side
+      # derivation, so a 120 s selection produced ~77 s chunks.
+
+    - id: E-25
+      kind: human-attested
+      claim: "The B-1 regression test was verified to have teeth: with both fixes reverted (keyword read-back restored AND the serialization lock neutralised) tests/test_server.py::test_concurrent_jobs_keep_their_own_topic_labels fails with the reviewer's exact symptom - job A's keywords describing job B's corpus. With the lock alone restored it passes, so the test was checked against the fully-reverted original rather than a partial revert. B-2 was verified end to end against a running server: a real SPA-shaped payload with chunk_max_seconds=120 resolves to chunk_max_words=500, not 200."
+
     - id: E-11
       kind: fixture-provenance
       fixture: tests/conftest.py
       synthetic: true
       # FakeRunner stubs only fetch/embed/sentiment/topic-fit. Cache I/O,
-      # batching, per-URL outcome bookkeeping and chunk-index rebasing run the
-      # real code. No network and no model weights in the default suite.
+      # batching, per-URL outcome bookkeeping, chunk-index rebasing AND
+      # topic_dataframe() run the real code — the hand-rolled dataframe stub
+      # that hid the `reassigned` column from every test (review A-4) is gone.
+      # No network and no model weights in the default suite.
 
     - id: E-12
       kind: human-attested
