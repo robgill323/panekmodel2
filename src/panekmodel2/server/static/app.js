@@ -36,6 +36,8 @@ const S = {
   exportKind: 'combined',
   excerptMode: 'representative',
   outlierVideo: 'all',
+  // Auto-follow is on until the reader scrolls the transcript themselves.
+  followTranscript: true,
 };
 
 const CHUNK_OPTS = [15, 30, 60, 120];
@@ -1104,7 +1106,11 @@ function screenVideo() {
       <section class="card">
         <div style="display:flex;align-items:baseline;justify-content:space-between;padding:18px 22px 12px;border-bottom:1px solid var(--line)">
           <h2 style="font-size:18px">Transcript</h2>
-          <span class="mono-note">${S.results.settings.chunk_max_seconds} s chunks · left rule = topic (dotted = weak assignment) · follows the playhead</span>
+          <span style="display:flex;align-items:center;gap:10px">
+            <button type="button" class="follow-chip" id="follow-chip" data-action="resume-follow"
+              ${S.followTranscript ? 'hidden' : ''}>↧ follow playhead</button>
+            <span class="mono-note">${S.results.settings.chunk_max_seconds} s chunks · left rule = topic (dotted = weak assignment)</span>
+          </span>
         </div>
         <div class="transcript" id="transcript">
           ${v.chunks.map((c) => `<button type="button"
@@ -1462,6 +1468,7 @@ function render() {
     mountPlayer();
     updatePlayhead();
     bindThroughline();
+    bindTranscriptFollow();
   } else {
     hideTooltip();
   }
@@ -1529,11 +1536,60 @@ function updatePlayhead() {
   if (clock) clock.textContent = fmtT(S.t) + ' / ' + fmtT(v.duration_s);
 
   const active = activeChunkIndex(v);
+  let activeRow = null;
   document.querySelectorAll('.t-row').forEach((row) => {
     const on = Number(row.dataset.chunk) === active;
+    // Highlighting is unconditional: it continues whether or not the reader
+    // has paused auto-follow.
     row.classList.toggle('active', on);
-    if (on && S.playing) row.scrollIntoView({ block: 'nearest' });
+    if (on) activeRow = row;
   });
+  if (activeRow && S.playing && S.followTranscript) followRow(activeRow);
+}
+
+/* Scrolls the transcript's own container and nothing else.
+
+   The previous implementation called row.scrollIntoView(), which scrolls every
+   scrollable ancestor up to the document — so playback dragged the page down,
+   and did it again on the next tick whenever the reader scrolled back. */
+function followRow(row) {
+  const container = $('#transcript');
+  if (!container) return;
+  const target = followScrollTop({
+    rowTop: row.offsetTop - container.offsetTop,
+    rowHeight: row.offsetHeight,
+    scrollTop: container.scrollTop,
+    viewHeight: container.clientHeight,
+    contentHeight: container.scrollHeight,
+    margin: 12,
+  });
+  if (target === null) return;
+  // Mark the scroll as ours so the container's scroll handler does not read
+  // it back as the reader taking over.
+  programmaticScroll = true;
+  container.scrollTop = target;
+  window.clearTimeout(programmaticScrollTimer);
+  programmaticScrollTimer = window.setTimeout(() => { programmaticScroll = false; }, 120);
+}
+
+let programmaticScroll = false;
+let programmaticScrollTimer = 0;
+
+function setFollow(on) {
+  if (S.followTranscript === on) return;
+  S.followTranscript = on;
+  const chip = $('#follow-chip');
+  if (chip) chip.hidden = on;
+}
+
+/* A manual scroll inside the transcript hands control to the reader. */
+function bindTranscriptFollow() {
+  const container = $('#transcript');
+  if (!container) return;
+  container.addEventListener('scroll', () => {
+    if (programmaticScroll) return;
+    setFollow(false);
+  }, { passive: true });
 }
 
 function seek(t) {
@@ -1710,6 +1766,10 @@ document.addEventListener('click', (event) => {
     return render();
   }
   if (el.dataset.video) {
+    // Any click that navigates to a moment — a transcript row, an excerpt's
+    // Play button, a row in the batch list — is an explicit "take me there",
+    // so it hands scrolling back to the playhead.
+    setFollow(true);
     S.videoId = el.dataset.video;
     S.t = Number(el.dataset.seek || 0);
     S.dim = null;
@@ -1743,6 +1803,13 @@ document.addEventListener('click', (event) => {
     case 'toggle-people': S.settings.detect_people = !S.settings.detect_people; return render();
     case 'start-run': return startRun();
     case 'toggle-play': return togglePlay();
+    case 'resume-follow': {
+      setFollow(true);
+      const v = currentVideo();
+      const row = v && document.querySelector(`.t-row[data-chunk="${activeChunkIndex(v)}"]`);
+      if (row) followRow(row);
+      return undefined;
+    }
     default: return undefined;
   }
 });
