@@ -1,0 +1,94 @@
+evidence_bundle:
+  artifact: src/panekmodel2/topic_model_params.py
+  produced_by: developer
+  worktree_ref: feature/advisory-cleanup@2b649e7
+  items:
+    - id: E-1
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests -m "not slow"'
+      expect: {exit: 0}
+      cwd: "."
+
+    - id: E-2
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests -m slow -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+
+    - id: E-3
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests/test_topic_granularity.py -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+
+    - id: E-4
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests/test_logging_redaction.py -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+      # N-1: reproduces the disarm before asserting the re-arm.
+
+    - id: E-5
+      kind: citation
+      ref: "src/panekmodel2/logging_redaction.py:107"
+      # is_armed — asks whether the CURRENT factory is ours. The old guard
+      # asked whether we had ever installed, which is why displacement was
+      # unrecoverable.
+
+    - id: E-6
+      kind: citation
+      ref: "src/panekmodel2/topic_model_params.py:44"
+      # min_cluster_size_for — granularity as a multiplier on the corpus-size
+      # baseline, floored at 2 and capped at what the batch supports.
+
+    - id: E-7
+      kind: citation
+      ref: "tests/test_follow_scroll.py:134"
+      # js_function_body — N-5 hardening: duplicate names raise, quoted braces
+      # are skipped, quote tracking is local so it cannot cascade.
+
+    - id: E-8
+      kind: file-exists
+      paths:
+        - src/panekmodel2/topic_model_params.py
+        - tests/test_topic_granularity.py
+
+    - id: E-9
+      kind: human-attested
+      claim: "N-1 was reproduced before being fixed and the fix verified against the reproduction. With a factory that builds logging.LogRecord directly (a true displacement rather than a wrapper), a panekmodel2.pipeline warning printed the API key verbatim and is_armed() reported False; install() then re-armed it, the key disappeared, and the displacing factory's own stamp survived on the record. The whole sequence is in tests, including a test asserting the displacement really does leak - without that, the re-arm test would pass vacuously."
+
+    - id: E-10
+      kind: human-attested
+      claim: "Running the N-1 re-arm path found a second defect that the fix itself enables: the displacing factory can return our own redacting class, and wrapping that again puts RedactingMixin in the bases twice, which raises a TypeError for an inconsistent MRO. Found by executing the path, not by reading it. Guarded and covered."
+
+    - id: E-11
+      kind: human-attested
+      claim: "All four changes were mutation-tested. Reverting the N-1 guard to the have-we-ever form fails 2 tests; reverting N-3 to the offsetTop arithmetic fails 1; flattening the granularity factors so coarse and fine equal standard fails 5; removing the N-5 duplicate-name guard fails 1. All pass on restore."
+
+    - id: E-12
+      kind: human-attested
+      claim: "A-14 and A-16 were verified as ALREADY CLOSED by story-2 rather than re-fixed - the retired-settings startup log line exists and youtube_api_key no longer claims to serve captions. The review report predates those fixes. A-13 was resolved by narrowing the docstring rather than routing ~20 write sites through mutate(); the reviewer offered both and the harmful half of A-3 was already fixed, so the overstatement was the remaining problem."
+
+    - id: E-13
+      kind: fixture-provenance
+      fixture: tests/test_topic_granularity.py
+      synthetic: true
+      # Pure parameter mapping over chosen corpus sizes. No model weights and
+      # no transcripts: this pins the mapping and its invariants, not topic
+      # quality.
+
+    - id: E-14
+      kind: assumed
+      claim: "Whether coarse/fine actually improve topics on real transcripts is NOT verified. The 13-video under-splitting observation that motivated this came from the human, not from a run I made; I pinned the mapping, the ordering and the safety bounds, and no test claims the output is better at any level. The multiplier values (2.0 / 1.0 / 0.5) are a considered starting point, not a tuned result."
+
+    - id: E-15
+      kind: assumed
+      claim: "The granularity picker's rendering was not inspected in a browser for this change. A test asserts the SPA offers exactly the three supported levels and no others, so picker/backend drift would fail, but the panel's appearance is unverified."
+
+    - id: E-16
+      kind: assumed
+      claim: "N-3 is reasoned from CSS/DOM semantics and pinned by a call-site assertion that offsetTop is not used in followRow. There is no browser here, so the claim that rect deltas stay correct when .transcript becomes positioned is not executed - only the dependency that made it fragile is removed."
+
+    - id: E-17
+      kind: assumed
+      claim: "This branch is based on d22a1b7 (story-3b), which was approved but is NOT merged to main - main is 6c18249. I chose that base after asking the orchestrator twice and receiving no answer while a replay gate fired repeatedly; N-5's target (js_function_body) exists only at d22a1b7, so no other base allows the task's full scope. If story-3b changes in review, this branch needs a rebase."
