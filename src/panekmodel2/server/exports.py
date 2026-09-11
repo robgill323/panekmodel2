@@ -160,4 +160,7 @@ def filename_for(results: dict, kind: str) -> str:
     settings = results.get("settings", {})
     stamp = str(results.get("run", {}).get("id", "run"))[:8]
     seconds = settings.get("chunk_max_seconds", "na")
-    return f"throughline_{kind}_{seconds}s_{stamp}.csv"
+    # Granularity changes the topic set, so a figure cited from one export
+    # cannot be reproduced from another without it in the name.
+    grain = settings.get("topic_granularity", "standard")
+    return f"throughline_{kind}_{seconds}s_{grain}_{stamp}.csv"

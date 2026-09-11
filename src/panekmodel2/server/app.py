@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -34,6 +34,7 @@ class RunSettings(BaseModel):
     embedding_model: Optional[str] = None
     sentiment_model: Optional[str] = None
     topic_reduce_to: Optional[int] = Field(default=None, ge=0, le=50)
+    topic_granularity: Optional[Literal["coarse", "standard", "fine"]] = None
     use_whisper_fallback: Optional[bool] = None
     detect_people: bool = True
 
@@ -51,6 +52,7 @@ def _resolve_settings(overrides: RunSettings) -> Settings:
         "embedding_model",
         "sentiment_model",
         "topic_reduce_to",
+        "topic_granularity",
         "use_whisper_fallback",
     ):
         value = getattr(overrides, field)

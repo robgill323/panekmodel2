@@ -14,6 +14,13 @@ from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, CountVectorizer
 from umap import UMAP
 
 from .chunker import Chunk
+from .topic_model_params import (
+    DEFAULT_GRANULARITY,
+    GRANULARITY_DESCRIPTIONS,
+    GRANULARITY_FACTORS,
+    granularity_factor,
+    min_cluster_size_for,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,16 +84,20 @@ def mark_reassigned(before: Sequence[int], after: Sequence[int]) -> List[bool]:
     """
     return [b == -1 and a != -1 for b, a in zip(before, after)]
 
-
 class TopicModeler:
     def __init__(
         self,
         embedding_model: str = "all-mpnet-base-v2",
         reduce_to: int = 10,
         extra_stop_words: List[str] | None = None,
+        topic_granularity: str = DEFAULT_GRANULARITY,
     ):
         self.embedding_model_name = embedding_model
         self.reduce_to = reduce_to
+        # Validated here rather than at fit time, so a bad value fails when the
+        # runner is built instead of minutes into a batch.
+        granularity_factor(topic_granularity)
+        self.topic_granularity = topic_granularity
         self.extra_stop_words: List[str] = [w.lower().strip() for w in (extra_stop_words or []) if w.strip()]
         self.model: BERTopic | None = None
         self._embedder: SentenceTransformer | None = None
@@ -157,14 +168,7 @@ class TopicModeler:
             random_state=42,
         )
 
-        # Scale min_cluster_size with corpus: small corpora need tiny clusters,
-        # large corpora (~200 chunks) work well with ~5 to avoid too many outliers.
-        if n_samples <= 10:
-            min_cluster_size = 2
-        elif n_samples <= 50:
-            min_cluster_size = 3
-        else:
-            min_cluster_size = max(3, min(5, n_samples // 40))
+        min_cluster_size = min_cluster_size_for(n_samples, self.topic_granularity)
         # min_samples controls noise sensitivity; scale it with min_cluster_size
         # rather than fixing at 1, which makes clusters too sensitive to noise.
         min_samples = max(1, min_cluster_size - 1)

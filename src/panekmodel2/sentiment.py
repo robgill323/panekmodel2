@@ -12,8 +12,8 @@ from .chunker import Chunk
 logger = logging.getLogger(__name__)
 
 # Single source of truth for turning a classifier label into a signed valence
-# multiplier.  Every consumer — rollups, CSV export, the Streamlit UI and the
-# HTTP API — must go through :func:`normalize_sentiment` rather than
+# multiplier.  Every consumer — rollups, CSV export and the HTTP API — must
+# go through :func:`normalize_sentiment` rather than
 # re-deriving the sign from the label text, which is how the export and the
 # on-screen metrics came to disagree.
 #
@@ -107,7 +107,7 @@ class SentimentAnalyzer:
             from transformers import pipeline as hf_pipeline  # noqa: PLC0415
 
             # Disable HF/tqdm progress bars during weight loading to avoid
-            # BrokenPipeError when stderr is redirected (e.g. inside Streamlit).
+            # BrokenPipeError when stderr is redirected (e.g. under a server).
             os.environ.setdefault("TQDM_DISABLE", "1")
             hf_logging.disable_progress_bar()
             logger.info("Loading sentiment model: %s", self.model_name)

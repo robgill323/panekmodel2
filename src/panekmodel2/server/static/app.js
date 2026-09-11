@@ -18,6 +18,7 @@ const S = {
     embedding_model: 'all-mpnet-base-v2',
     sentiment_model: 'cardiffnlp/twitter-roberta-base-sentiment-latest',
     topic_reduce_to: 10,
+    topic_granularity: 'standard',
     use_whisper_fallback: false,
     detect_people: true,
   },
@@ -55,6 +56,14 @@ const SENT_OPTS = [
 // UI marks it rather than presenting the assignment as settled.
 const LOW_CONFIDENCE = 0.5;
 const OUTLIER_COLOR = 'var(--line2)';
+/* Mirrors GRANULARITY_DESCRIPTIONS in topic_model_params.py. A 13-video trial
+   showed small batches under-splitting — long homogeneous videos collapsing to
+   one topic — so this is the knob a researcher reaches for first. */
+const GRANULARITY_OPTS = [
+  ['coarse', 'Coarse', 'Fewer, broader topics. Good for asking what a batch is broadly about.'],
+  ['standard', 'Standard', 'The balanced default.'],
+  ['fine', 'Fine', 'More, narrower topics. Use when one long video collapses into a single topic.'],
+];
 
 // ── small helpers ───────────────────────────────────────────────────
 const $ = (sel) => document.querySelector(sel);
@@ -422,6 +431,7 @@ function screenRun() {
     ['URLs parsed', String(urls.length)],
     ['Duplicates removed', String(countRawLines(S.urlText) - urls.length)],
     ['Chunk size', st.chunk_max_seconds + ' s'],
+    ['Topic granularity', st.topic_granularity],
     ['Embeddings', shortModel(st.embedding_model)],
     ['Sentiment', shortModel(st.sentiment_model)],
     ['Whisper fallback', st.use_whisper_fallback ? 'on · slow' : 'off'],
@@ -457,7 +467,7 @@ function screenRun() {
         <button type="button" class="adv-toggle" data-action="toggle-adv">
           <span style="display:flex;flex-direction:column;gap:3px">
             <span style="font-size:13.5px;font-weight:600">Advanced settings</span>
-            <span class="mono-note">${st.chunk_max_seconds} s chunks · ${esc(shortModel(st.embedding_model))} · ${esc(shortModel(st.sentiment_model))}${st.use_whisper_fallback ? ' · Whisper on' : ''}</span>
+            <span class="mono-note">${st.chunk_max_seconds} s chunks · ${esc(st.topic_granularity)} topics · ${esc(shortModel(st.embedding_model))} · ${esc(shortModel(st.sentiment_model))}${st.use_whisper_fallback ? ' · Whisper on' : ''}</span>
           </span>
           <span class="mono-note">${S.adv ? '▲' : '▼'}</span>
         </button>
@@ -501,6 +511,20 @@ function advancedPanel() {
         ${CHUNK_OPTS.map((c) => `<button type="button" class="seg" data-field="chunk_max_seconds" data-value="${c}" aria-pressed="${st.chunk_max_seconds === c}">${c} s</button>`).join('')}
       </div>
       <div class="hint" style="margin-top:8px">Shorter chunks find sharper topic boundaries; longer chunks give the sentiment model more context.</div>
+    </div>
+    <div>
+      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:9px">
+        <span class="field-label">Topic granularity</span>
+        <span style="font:400 12px var(--mono);color:var(--ink2)">${esc(st.topic_granularity)}</span>
+      </div>
+      <div class="seg-row">
+        ${GRANULARITY_OPTS.map(([key, label]) => `<button type="button" class="seg"
+          data-field="topic_granularity" data-value="${key}"
+          aria-pressed="${st.topic_granularity === key}">${label}</button>`).join('')}
+      </div>
+      <div class="hint" style="margin-top:8px">${esc(
+        (GRANULARITY_OPTS.find(([k]) => k === st.topic_granularity) || GRANULARITY_OPTS[1])[2]
+      )}</div>
     </div>
     <div class="picker-grid">
       <div>
@@ -632,7 +656,8 @@ function screenBatch() {
       <div>
         <div class="kicker">RUN ${esc(runClock())} · SESSION ONLY</div>
         <h1 style="font-size:38px;margin:12px 0 8px">Batch overview</h1>
-        <p class="lede">${R.settings.chunk_max_seconds} s chunks · ${esc(shortModel(R.settings.embedding_model))} embeddings ·
+        <p class="lede">${R.settings.chunk_max_seconds} s chunks · ${esc(R.settings.topic_granularity || 'standard')} topic granularity ·
+          ${esc(shortModel(R.settings.embedding_model))} embeddings ·
           ${esc(shortModel(R.settings.sentiment_model))} sentiment · Whisper fallback ${R.settings.use_whisper_fallback ? 'on' : 'off'}.
           These settings are stamped on every export.</p>
       </div>
@@ -1261,6 +1286,7 @@ function screenExport() {
         </div>
         <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px">
           ${[['run', runClock()], ['chunk size', R.settings.chunk_max_seconds + ' s'],
+            ['granularity', R.settings.topic_granularity || 'standard'],
             ['embeddings', shortModel(R.settings.embedding_model)], ['sentiment', shortModel(R.settings.sentiment_model)],
             ['encoding', 'UTF-8 · comma']].map(([k, v]) =>
             `<div class="summary-row"><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join('')}
@@ -1296,7 +1322,8 @@ function screenExport() {
 
 function exportFilename(kind) {
   const stamp = String(S.jobId || 'run').slice(0, 8);
-  return `throughline_${kind}_${S.results.settings.chunk_max_seconds}s_${stamp}.csv`;
+  const grain = S.results.settings.topic_granularity || 'standard';
+  return `throughline_${kind}_${S.results.settings.chunk_max_seconds}s_${grain}_${stamp}.csv`;
 }
 function schemaDims(kind) {
   const R = S.results;
@@ -1557,9 +1584,18 @@ function updatePlayhead() {
 function followRow(row) {
   const container = $('#transcript');
   if (!container) return;
+  // Measured with getBoundingClientRect rather than offsetTop. offsetTop is
+  // relative to the nearest POSITIONED ancestor, so the old
+  // `row.offsetTop - container.offsetTop` was only correct while row and
+  // container happened to share an offsetParent. Adding `position: relative`
+  // to .transcript — for a sticky header, say — would have silently
+  // mis-targeted every follow, and the pure-function tests could not catch it
+  // because rowTop is an input to them. Rect deltas hold regardless.
+  const rowBox = row.getBoundingClientRect();
+  const boxTop = container.getBoundingClientRect().top;
   const target = followScrollTop({
-    rowTop: row.offsetTop - container.offsetTop,
-    rowHeight: row.offsetHeight,
+    rowTop: rowBox.top - boxTop + container.scrollTop,
+    rowHeight: rowBox.height,
     scrollTop: container.scrollTop,
     viewHeight: container.clientHeight,
     contentHeight: container.scrollHeight,

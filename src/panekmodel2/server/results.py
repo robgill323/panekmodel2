@@ -1,8 +1,8 @@
 """Turn PipelineOutputs into the JSON shape the Throughline frontend renders.
 
 Everything numeric here goes through :func:`panekmodel2.sentiment.normalize_sentiment`
-so the API, the CSV exports and the Streamlit UI cannot disagree about what a
-sentiment score means.
+so the API and the CSV exports cannot disagree about what a sentiment score
+means.
 """
 
 from __future__ import annotations

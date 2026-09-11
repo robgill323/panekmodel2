@@ -6,6 +6,8 @@ from typing import List, Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+from .topic_model_params import DEFAULT_GRANULARITY, granularity_factor
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,6 +29,14 @@ class Settings(BaseSettings):
     chunk_max_words: int = Field(default=200, description="Maximum words per chunk before splitting.")
     chunk_max_seconds: int = Field(default=60, description="Maximum seconds per chunk before splitting.")
     topic_reduce_to: int = Field(default=10, description="Reduce topics to roughly this count for display.")
+    topic_granularity: str = Field(
+        default=DEFAULT_GRANULARITY,
+        description=(
+            "How finely to split the batch into topics: coarse (fewer, broader), "
+            "standard, or fine (more, narrower). Scales HDBSCAN's minimum "
+            "cluster size relative to the corpus-size baseline."
+        ),
+    )
     sentiment_model: str = Field(
         default="cardiffnlp/twitter-roberta-base-sentiment-latest",
         description=(
@@ -73,6 +83,8 @@ def warn_about_retired_settings() -> List[str]:
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     settings = Settings()
+    # Fail at startup on a bad .env value rather than minutes into a batch.
+    granularity_factor(settings.topic_granularity)
     warn_about_retired_settings()
     # Propagate HF token to env for libraries that read os.environ directly.
     if settings.hf_token:

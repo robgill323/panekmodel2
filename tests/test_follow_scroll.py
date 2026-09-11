@@ -138,24 +138,65 @@ def js_function_body(source: str, name: str) -> str:
     four wiring regressions deletes a call from a *particular* function, and a
     string that still appears somewhere else in the file keeps the test green.
     Scoping each assertion to its enclosing function is what makes these bite.
-    """
-    for pattern in (f"function {name}(", f"async function {name}("):
-        start = source.find(pattern)
-        if start != -1:
-            break
-    else:
-        raise AssertionError(f"{name}() not found — was it renamed?")
 
-    brace = source.index("{", start)
+    N-5 hardening, and it fails loudly rather than mis-scoping:
+
+    * Braces inside string and template literals are skipped, so a literal
+      "}" cannot truncate a body early. Quote tracking starts at the opening
+      brace, not at the top of the file — an earlier stray quote elsewhere in
+      the file then cannot cascade and swallow everything after it, which is
+      exactly what a whole-file mask did when I tried that first.
+    * A name defined more than once raises, rather than the first definition
+      silently winning.
+
+    Known limit, recorded rather than guessed: a regex literal containing an
+    unbalanced brace would still confuse the scan. There are none in this
+    codebase, and the failure would be a loud "unbalanced braces", not a
+    quietly wrong body.
+    """
+    # One pattern only: "async function f(" contains "function f(", so
+    # searching both forms counted a single async definition twice.
+    hits = list(_find_all(source, f"function {name}("))
+    if not hits:
+        raise AssertionError(f"{name}() not found — was it renamed?")
+    if len(hits) > 1:
+        raise AssertionError(
+            f"{name}() is defined {len(hits)} times; scoping to 'the' body would "
+            "silently pick the first. Disambiguate before asserting on it."
+        )
+
+    brace = source.index("{", hits[0])
     depth = 0
-    for i in range(brace, len(source)):
-        if source[i] == "{":
+    quote = None
+    i = brace
+    while i < len(source):
+        ch = source[i]
+        if quote is not None:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+        elif ch in "\"'`":
+            quote = ch
+        elif ch == "{":
             depth += 1
-        elif source[i] == "}":
+        elif ch == "}":
             depth -= 1
             if depth == 0:
                 return source[brace : i + 1]
+        i += 1
     raise AssertionError(f"unbalanced braces in {name}()")
+
+
+def _find_all(haystack: str, needle: str):
+    start = 0
+    while True:
+        i = haystack.find(needle, start)
+        if i == -1:
+            return
+        yield i
+        start = i + 1
 
 
 # ── the decisions, exercised through node ───────────────────────────
@@ -280,3 +321,48 @@ def test_function_body_helper_actually_scopes():
     assert "beta()" not in js_function_body(source, "a")
     with pytest.raises(AssertionError):
         js_function_body(source, "missing")
+
+
+def test_helper_handles_nested_braces():
+    """N-5: premature truncation at the first inner close-brace.
+
+    Without depth counting this returns "{ if (x) {" and every assertion
+    scoped to such a function silently checks almost nothing.
+    """
+    source = "function a() { if (x) { alpha(); } }\nfunction b() { beta(); }"
+    body = js_function_body(source, "a")
+    assert "alpha()" in body
+    assert "beta()" not in body
+    assert body.count("{") == body.count("}") == 2
+
+
+@pytest.mark.parametrize("literal", [
+    "'}'",                 # a close brace in a single-quoted string
+    '"}"',                 # …double-quoted
+    "`}`",                 # …a template literal
+    "'{'",                 # an *opening* brace, which would unbalance upward
+    "'\\'}'",              # an escaped quote before a brace
+])
+def test_braces_inside_literals_do_not_truncate(literal):
+    """N-5: a quoted brace must not be counted by the matcher."""
+    source = f"function a() {{ pick({literal}); alpha(); }}\nfunction b() {{ beta(); }}"
+    body = js_function_body(source, "a")
+    assert "alpha()" in body
+    assert "beta()" not in body
+
+
+def test_duplicate_definitions_raise_rather_than_picking_the_first():
+    """N-5: silently taking the first would make an assertion meaningless."""
+    source = "function a() { alpha(); }\nfunction a() { second(); }"
+    with pytest.raises(AssertionError, match="defined 2 times"):
+        js_function_body(source, "a")
+
+
+def test_unbalanced_braces_fail_loudly():
+    with pytest.raises(AssertionError, match="unbalanced"):
+        js_function_body("function a() { alpha();", "a")
+
+
+def test_async_functions_are_found():
+    source = "async function a() { alpha(); }"
+    assert "alpha()" in js_function_body(source, "a")

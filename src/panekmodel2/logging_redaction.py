@@ -83,6 +83,10 @@ _redacting_classes: Dict[type, type] = {}
 
 
 def _redacting_class(base: type) -> type:
+    # Re-arming can hand us a class that already mixes redaction in — wrapping
+    # it again would put RedactingMixin in the bases twice and fail the MRO.
+    if issubclass(base, RedactingMixin):
+        return base
     cls = _redacting_classes.get(base)
     if cls is None:
         cls = type(f"Redacting{base.__name__}", (RedactingMixin, base), {})
@@ -93,18 +97,35 @@ def _redacting_class(base: type) -> type:
 # Kept for the tests that assert on the plain case and for uninstall().
 RedactingLogRecord: Type[logging.LogRecord] = _redacting_class(logging.LogRecord)  # type: ignore[assignment]
 
+# Marks a factory as ours, so install() can ask "is the current factory ours?"
+# rather than "have we ever installed?" — see install().
+_REDACTOR_ATTR = "_panekmodel2_redacting"
+
 _original_factory: Optional[Callable] = None
+
+
+def is_armed() -> bool:
+    """True when the *currently installed* factory is one of ours."""
+    return bool(getattr(logging.getLogRecordFactory(), _REDACTOR_ATTR, False))
 
 
 def install(package: str = PACKAGE) -> None:
     """Route this package's log records through the redacting variant.
 
-    Idempotent. Records from every other library keep both their content and
-    the factory that built them.
+    Idempotent, and — importantly — **re-armable**. The guard tests whether the
+    factory installed *right now* is ours, not whether we have ever installed
+    one. The earlier "have we ever?" guard meant that anything calling
+    ``logging.setLogRecordFactory`` after import displaced redaction wholesale
+    and a later ``install()`` returned early, leaving credentials printing
+    verbatim with no error and no way to recover short of a process restart.
+
+    On re-arming, the displacing factory is wrapped rather than discarded, so
+    whatever installed it keeps its own behaviour (the D-1 contract).
     """
     global _original_factory
-    if _original_factory is not None:
+    if is_armed():
         return
+
     previous = logging.getLogRecordFactory()
     _original_factory = previous
     prefix = package + "."
@@ -117,12 +138,17 @@ def install(package: str = PACKAGE) -> None:
             redact_exception_text(record)
         return record
 
+    setattr(factory, _REDACTOR_ATTR, True)
     logging.setLogRecordFactory(factory)
 
 
 def uninstall() -> None:
-    """Restore the previous record factory. Used by tests."""
+    """Restore the factory this package wrapped. Used by tests.
+
+    Only unwinds if the current factory is still ours; if something displaced
+    us, its factory is left alone rather than being clobbered.
+    """
     global _original_factory
-    if _original_factory is not None:
+    if is_armed() and _original_factory is not None:
         logging.setLogRecordFactory(_original_factory)
-        _original_factory = None
+    _original_factory = None

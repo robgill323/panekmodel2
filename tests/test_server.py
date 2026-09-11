@@ -917,3 +917,66 @@ def test_per_video_stages_close_with_true_totals(settings):
     assert all(job.stage(k).status == "done"
                for k in ("fetch", "chunk", "embed", "sentiment", "entities"))
     assert job.stage("topics").status == "running"
+
+
+# ── topic granularity through the API ───────────────────────────────
+@pytest.mark.parametrize("level", ["coarse", "standard", "fine"])
+def test_granularity_is_accepted_and_stamped_into_the_run(client, level):
+    """It changes the topic set, so it must reach the results and the exports."""
+    job_id = start(client, [URL_A], topic_granularity=level)
+    wait_for(client, job_id)
+    results = client.get(f"/api/runs/{job_id}/results").json()
+    assert results["settings"]["topic_granularity"] == level
+
+
+def test_granularity_defaults_to_standard_when_not_sent(client):
+    job_id = start(client, [URL_A])
+    wait_for(client, job_id)
+    settings = client.get(f"/api/runs/{job_id}/results").json()["settings"]
+    assert settings["topic_granularity"] == "standard"
+
+
+def test_an_unknown_granularity_is_rejected_by_the_api(client):
+    """Rejected at the boundary with a 422, not deep in the pipeline."""
+    res = client.post("/api/runs", json={"urls": [URL_A],
+                                         "settings": {"topic_granularity": "medium"}})
+    assert res.status_code == 422
+
+
+def test_defaults_endpoint_reports_granularity(client):
+    assert client.get("/api/defaults").json()["topic_granularity"] == "standard"
+
+
+def test_granularity_appears_in_the_export_filename(client):
+    """A figure cited from one export cannot be reproduced from another
+    without knowing the granularity that produced the topics."""
+    job_id = start(client, [URL_A], topic_granularity="fine")
+    wait_for(client, job_id)
+    res = client.get(f"/api/runs/{job_id}/export/topic.csv")
+    assert "_fine_" in res.headers["content-disposition"]
+
+
+def test_the_runner_receives_the_granularity(client):
+    """Stamping it into metadata would be a lie if the modeler never saw it."""
+    job_id = start(client, [URL_A], topic_granularity="coarse")
+    wait_for(client, job_id)
+    assert client.runners, "no runner was built"
+    assert client.runners[-1].topic_modeler.topic_granularity == "coarse"
+
+
+# ── N-3: the scroll inputs must be position-independent ────────────
+def test_follow_row_measures_with_rects_not_offsettop():
+    """offsetTop is relative to the nearest POSITIONED ancestor.
+
+    `row.offsetTop - container.offsetTop` was only correct while the two
+    shared an offsetParent; adding `position: relative` to .transcript would
+    have silently mis-targeted every follow, and the pure-function tests could
+    not catch it because rowTop is an input to them.
+    """
+    from .test_follow_scroll import _code_only, js_function_body
+
+    body = js_function_body(_code_only(Path(__file__).resolve().parents[1]
+                                       / "src/panekmodel2/server/static/app.js"), "followRow")
+    assert "getBoundingClientRect()" in body
+    assert "offsetTop" not in body, "offsetTop reintroduces the positioned-ancestor dependency"
+    assert "container.scrollTop" in body

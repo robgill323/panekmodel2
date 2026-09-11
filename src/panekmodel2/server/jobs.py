@@ -119,10 +119,20 @@ class Job:
     def mutate(self):
         """Hold the job lock while changing job state.
 
-        Every write goes through here so the lock actually serializes readers
-        against the writer. Previously it was taken only in progress_dict(),
-        which serialized readers against each other and never against the
-        worker — it implied safety it did not provide.
+        What this actually guarantees, stated narrowly on purpose: reads via
+        progress_dict() are snapshot-consistent for url_states and log,
+        because those are copied under the lock. Writes are NOT serialized —
+        only the job.waiting assignments take this lock, so the worker's
+        updates to status, timestamps, results, error, log and Stage fields
+        are unsynchronized. What remains is torn reads of independent fields
+        (a stage whose status has advanced but whose progress has not):
+        cosmetic in CPython, not corrupting.
+
+        The docstring used to claim every write went through here. It never
+        did, and that overstatement was the same failure the lock was added to
+        fix — a guarantee implied but not provided. Routing all ~20 write
+        sites through it would be the fuller fix; until then this says what is
+        true rather than what was intended.
         """
         with self._lock:
             yield self
@@ -471,5 +481,6 @@ def settings_summary(settings: Settings) -> dict:
         "embedding_model": settings.embedding_model,
         "sentiment_model": settings.sentiment_model,
         "topic_reduce_to": settings.topic_reduce_to,
+        "topic_granularity": settings.topic_granularity,
         "use_whisper_fallback": settings.use_whisper_fallback,
     }

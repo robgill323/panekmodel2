@@ -239,6 +239,7 @@ class PipelineRunner:
             embedding_model=self.settings.embedding_model,
             reduce_to=self.settings.topic_reduce_to,
             extra_stop_words=list(self.settings.custom_stopwords),
+            topic_granularity=self.settings.topic_granularity,
         )
         self.sentiment_analyzer = SentimentAnalyzer(
             model_name=self.settings.sentiment_model,

@@ -65,6 +65,7 @@ Environment variables (or .env) via pydantic BaseSettings:
 - `CHUNK_MAX_SECONDS` (default 60) and `CHUNK_MAX_WORDS` (default 200) — see
   Chunk size below.
 - `TOPIC_REDUCE_TO` (default 10; `0` disables topic reduction).
+- `TOPIC_GRANULARITY` — `coarse`, `standard` (default) or `fine`. See below.
 
 Retired in 0.2.0: `GOOGLE_CREDENTIALS_FILE` and `GOOGLE_TOKEN_FILE`, which
 configured the OAuth captions tier. Leaving them in a `.env` is harmless — they
@@ -104,6 +105,24 @@ three-class: a procedural passage can genuinely be scored neutral.
 or negative and values near zero mean low confidence, not neutrality. Whenever
 a run produces no neutral chunks the UI says so, and it only calls a model
 binary when that model actually is.
+
+## Topic granularity
+
+How finely a batch is split into topics, selectable per run in Advanced
+settings and stamped into the run header, the export metadata and the export
+filename — granularity changes the topic set, so a figure cited from one
+export cannot be reproduced from another without it.
+
+| Level | Effect |
+|---|---|
+| `coarse` | Fewer, broader topics. Good for asking what a batch is broadly about. |
+| `standard` | The balanced default; identical to the behaviour before this knob existed. |
+| `fine` | More, narrower topics. Use when one long video collapses into a single topic. |
+
+It scales HDBSCAN's minimum cluster size relative to the corpus-size
+baseline rather than setting an absolute, so it composes with batch size. The
+result is always at least 2 and never more than the batch can support, so a
+coarse setting on a very short video cannot make the clusterer raise.
 
 ## Chunk size
 

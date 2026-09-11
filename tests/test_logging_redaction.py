@@ -220,3 +220,114 @@ def test_traceback_redaction_does_not_disturb_other_packages():
             logging.getLogger("somelib.worker").exception("their failure")
 
     assert KEY in stream.getvalue()
+
+
+# ── N-1: redaction must be re-armable after displacement ───────────
+@contextmanager
+def displaced_factory(stamp="corr-9"):
+    """Replace the record factory WITHOUT delegating — a true displacement.
+
+    A third party that wraps our factory is the D-1 case and keeps redaction
+    working. This is the other one: something installs its own factory built
+    on logging.LogRecord, so our redaction is gone entirely.
+    """
+    from panekmodel2 import logging_redaction
+
+    saved = logging.getLogRecordFactory()
+
+    def factory(*args, **kwargs):
+        record = logging.LogRecord(*args, **kwargs)
+        record.correlation_id = stamp
+        return record
+
+    logging.setLogRecordFactory(factory)
+    try:
+        yield
+    finally:
+        logging.setLogRecordFactory(saved)
+        logging_redaction._original_factory = None
+        logging_redaction.install()
+
+
+def test_displacement_disarms_redaction():
+    """Reproduces the reviewer's scenario before asserting the fix."""
+    exc = RuntimeError(f"403 {REQUEST_URL}")
+    with displaced_factory():
+        assert KEY in capture("panekmodel2.pipeline", "metadata failed: %s", exc), (
+            "this test is meaningless unless displacement really disarms us"
+        )
+
+
+def test_install_re_arms_after_displacement():
+    """The guard must ask 'is the current factory ours', not 'have we ever'."""
+    from panekmodel2 import logging_redaction
+
+    exc = RuntimeError(f"403 {REQUEST_URL}")
+    with displaced_factory():
+        assert logging_redaction.is_armed() is False
+        logging_redaction.install()
+        assert logging_redaction.is_armed() is True
+        out = capture("panekmodel2.pipeline", "metadata failed: %s", exc)
+
+    assert KEY not in out, "install() failed to re-arm after displacement"
+    assert "key=REDACTED" in out
+
+
+def test_re_arming_wraps_the_displacing_factory_rather_than_discarding_it():
+    """D-1's contract has to survive re-arming too."""
+    from panekmodel2 import logging_redaction
+
+    with displaced_factory(stamp="corr-rearm"):
+        logging_redaction.install()
+        record = logging.getLogger("panekmodel2.pipeline").makeRecord(
+            "panekmodel2.pipeline", logging.WARNING, "f", 1, "?key=%s", (KEY,), None
+        )
+
+    assert record.correlation_id == "corr-rearm"
+    assert KEY not in record.getMessage()
+
+
+def test_re_arming_does_not_double_wrap_the_record_class():
+    """Wrapping an already-redacting class twice is an MRO error.
+
+    Found by running the re-arm path rather than reasoning about it: the
+    displacing factory can itself return our redacting class.
+    """
+    from panekmodel2 import logging_redaction
+
+    saved = logging.getLogRecordFactory()
+    try:
+        logging.setLogRecordFactory(saved)  # currently ours
+        inner = logging.getLogRecordFactory()
+
+        def wraps_ours(*args, **kwargs):
+            return inner(*args, **kwargs)
+
+        logging.setLogRecordFactory(wraps_ours)
+        logging_redaction._original_factory = None
+        logging_redaction.install()
+        record = logging.getLogger("panekmodel2.pipeline").makeRecord(
+            "panekmodel2.pipeline", logging.WARNING, "f", 1, "?key=%s", (KEY,), None
+        )
+        assert KEY not in record.getMessage()
+    finally:
+        logging.setLogRecordFactory(saved)
+        logging_redaction._original_factory = None
+        logging_redaction.install()
+
+
+def test_install_is_idempotent_when_already_armed():
+    from panekmodel2 import logging_redaction
+
+    before = logging.getLogRecordFactory()
+    logging_redaction.install()
+    assert logging.getLogRecordFactory() is before, "install() re-wrapped itself"
+
+
+def test_is_armed_reports_the_current_factory_not_history():
+    from panekmodel2 import logging_redaction
+
+    assert logging_redaction.is_armed() is True
+    with displaced_factory():
+        assert logging_redaction.is_armed() is False
+    assert logging_redaction.is_armed() is True
