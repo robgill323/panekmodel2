@@ -1,0 +1,85 @@
+evidence_bundle:
+  artifact: src/panekmodel2/server/jobs.py
+  produced_by: developer
+  worktree_ref: feature/ner-progress-stage@82a50ab
+  items:
+    - id: E-1
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests -m "not slow"'
+      expect: {exit: 0}
+      cwd: "."
+
+    - id: E-2
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests -m slow -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+
+    - id: E-3
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests/test_logging_redaction.py -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+      # D-1 and D-2 coverage: factory delegation, custom record classes,
+      # traceback and stack_info redaction, third-party logging untouched.
+
+    - id: E-4
+      kind: file-exists
+      paths:
+        - artifacts/implementation/ner-stage-verification-2026-09-11.md
+        - artifacts/implementation/smoke-run-2026-09-10.md
+
+    - id: E-5
+      kind: citation
+      ref: "src/panekmodel2/server/jobs.py:38"
+      # The entities stage. Entity detection previously ran under no stage at
+      # all, which is what left 84% of a real run looking finished.
+
+    - id: E-6
+      kind: citation
+      ref: "src/panekmodel2/pipeline.py:378"
+      # _people_for — tops up a cached entry written with detection off,
+      # rather than re-fetching and re-embedding the video.
+
+    - id: E-7
+      kind: citation
+      ref: "src/panekmodel2/logging_redaction.py:66"
+      # redact_exception_text — D-2. Formatter renders exc_info through
+      # formatException(), a path getMessage() never touches.
+
+    - id: E-8
+      kind: citation
+      ref: "src/panekmodel2/logging_redaction.py:113"
+      # The factory now delegates to the one it replaced — D-1.
+
+    - id: E-9
+      kind: human-attested
+      claim: "The defect was measured before and after on real videos through the server API, not reasoned about. Before: all five stages done ~1 minute into a 324.6 s run, 84% of wall clock silent. After, cold: fetch +3.0s, chunk/embed/sentiment/entities +24.3s, topics +28.3s, TOTAL 28.3s, silent tail 0.0s (0%), and completion order matches declared order. A warm re-run of the original two-video corpus fell from 324.6 s to 12.4 s because entities now come from the cache. The cold run was forced by changing chunk size to move the cache key - nothing was deleted, and a request to remove the user's cache directory was correctly refused by the permission system."
+
+    - id: E-10
+      kind: human-attested
+      claim: "D-2 was verified as a real leak before being fixed: logger.exception on an error embedding key=<secret> through a package logger printed the key verbatim in the traceback's final line. Both advisories were then mutation-tested - reverting D-1 to a bare LogRecord fails 3 tests, removing the exc_text redaction fails 1 - and all pass on restore."
+
+    - id: E-11
+      kind: human-attested
+      claim: "Two defects in my own work were caught during verification and fixed. (1) The first stage-mapping marked sentiment done on the entities message, so a single-video run showed sentiment completing before chunking, and for a batch it was simply wrong since the next video's chunking still lay ahead; per-video stages are now closed together at the shared fit, pinned by a completion-order test. (2) The new logging tests left a package logger at ERROR, which suppressed a warning an unrelated test asserts on - test pollution, not a product bug; handler and level are now saved and restored together."
+
+    - id: E-12
+      kind: fixture-provenance
+      fixture: tests/conftest.py
+      synthetic: true
+      # FakeRunner stubs fetch/embed/sentiment/topic-fit only. Cache I/O,
+      # the people top-up path, batching and per-URL outcomes run real code.
+      # No network and no model weights in the default suite.
+
+    - id: E-13
+      kind: assumed
+      claim: "The 26x warm-run figure is specific to this corpus: NER cost scales with chunk count and one of the two videos is 4.5 hours long, so the speedup on a batch of short videos will be smaller. One machine, one measurement each for cold and warm."
+
+    - id: E-14
+      kind: assumed
+      claim: "CACHE_VERSION 3 makes every pre-existing cache entry unreachable by key, so the first run after this change re-does transcript, embedding and sentiment work for every video. That is the intended invalidation path and is covered by a test, but the one-time cost on a large existing cache was not measured."
+
+    - id: E-15
+      kind: assumed
+      claim: "The SPA renders whatever stages the API reports and was confirmed to have no hardcoded stage count, but the six-stage progress screen was not rendered in a browser for this change - there is no JS test harness, so no test would fail if the stage list displayed wrongly."

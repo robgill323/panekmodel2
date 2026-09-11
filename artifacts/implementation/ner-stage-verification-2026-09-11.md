@@ -54,6 +54,26 @@ also simply wrong, since the next video's chunking still lay ahead. Per-video
 stages are now closed together when the shared fit begins. The check above
 asserts the completion order matches the declared order.
 
+## Stage counters
+
+Rendering the finished progress screen exposed a second, smaller dishonesty:
+every per-stage note still read `0/5 URLs`, `0/5 videos embedded` and so on,
+because the counters were derived from per-URL outcome state that is only
+written after the run returns. They never advanced during a run and were
+wrong at the end of one. Counters are now driven by the per-video progress
+messages themselves, and the per-video stages close with their true totals:
+
+```
+fetch      5/5 URLs
+chunk      5/5 videos
+embed      5/5 videos embedded
+sentiment  5/5 videos scored
+entities   5/5 videos
+```
+
+Pinned by two tests that drive the message sequence directly, rather than by
+polling a fake runner that finishes between polls.
+
 ## Not covered
 
 One machine, two videos. The 26× warm figure is specific to this corpus —

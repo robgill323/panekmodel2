@@ -851,3 +851,69 @@ def test_numbers_are_not_quoted_by_the_guard():
     """Negative valences start with '-' and must stay numeric."""
     rows = list(csv.reader(io.StringIO(exports.to_csv(_injectable_results("safe"), "combined"))))
     assert rows[1][rows[0].index("valence")] == "-0.42"
+
+
+# ── stage counters must advance, not sit at 0/N ─────────────────────
+def _drive_progress(job, manager, messages):
+    for message in messages:
+        manager._on_progress(job, message)
+    return {s.key: s.note for s in job.stages}
+
+
+def test_stage_counters_advance_through_a_batch(settings):
+    """The notes are the only per-stage feedback; 0/N throughout is useless."""
+    manager = JobManager(runner_factory=FakeRunner)
+    job = Job(
+        id="counters", urls=[URL_A, URL_B], settings=settings,
+        stages=[Stage(key=k, name=n) for k, n in STAGES],
+    )
+    for url, vid in ((URL_A, VID_A), (URL_B, VID_B)):
+        job.url_states[url] = {"url": url, "video_id": vid, "title": url,
+                               "status": "queued", "reason": ""}
+
+    after_first = _drive_progress(job, manager, [
+        f"Fetching transcript: {VID_A}",
+        f"{VID_A}: 12 segments → 6 chunks",
+        f"{VID_A}: running sentiment…",
+        f"{VID_A}: detecting people & entities…",
+    ])
+    assert after_first["fetch"] == "1/2 URLs"
+    assert after_first["chunk"] == "1/2 videos"
+
+    after_second = _drive_progress(job, manager, [
+        f"Fetching transcript: {VID_B}",
+        f"{VID_B}: 12 segments → 6 chunks",
+        f"{VID_B}: running sentiment…",
+        f"{VID_B}: detecting people & entities…",
+    ])
+    assert after_second["fetch"] == "2/2 URLs", "the fetch counter never advanced"
+    assert after_second["chunk"] == "2/2 videos"
+
+
+def test_per_video_stages_close_with_true_totals(settings):
+    """A finished run must not display whatever the last in-flight note said."""
+    manager = JobManager(runner_factory=FakeRunner)
+    job = Job(
+        id="totals", urls=[URL_A, URL_B], settings=settings,
+        stages=[Stage(key=k, name=n) for k, n in STAGES],
+    )
+    for url, vid in ((URL_A, VID_A), (URL_B, VID_B)):
+        job.url_states[url] = {"url": url, "video_id": vid, "title": url,
+                               "status": "queued", "reason": ""}
+
+    notes = _drive_progress(job, manager, [
+        f"Fetching transcript: {VID_A}", f"{VID_A}: 12 segments → 6 chunks",
+        f"{VID_A}: running sentiment…", f"{VID_A}: detecting people & entities…",
+        f"Fetching transcript: {VID_B}", f"{VID_B}: 12 segments → 6 chunks",
+        f"{VID_B}: running sentiment…", f"{VID_B}: detecting people & entities…",
+        "Fitting topic model on 12 combined chunks…",
+    ])
+
+    assert notes["fetch"] == "2/2 URLs"
+    assert notes["chunk"] == "2/2 videos"
+    assert notes["embed"] == "2/2 videos embedded"
+    assert notes["sentiment"] == "2/2 videos scored"
+    assert notes["entities"] == "2/2 videos"
+    assert all(job.stage(k).status == "done"
+               for k in ("fetch", "chunk", "embed", "sentiment", "entities"))
+    assert job.stage("topics").status == "running"

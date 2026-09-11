@@ -106,6 +106,9 @@ class Job:
     stages: List[Stage] = field(default_factory=list)
     url_states: Dict[str, dict] = field(default_factory=dict)
     log: List[str] = field(default_factory=list)
+    # stage key -> video ids seen reaching that stage, so the per-stage
+    # counters advance during the run instead of sitting at 0/N.
+    stage_videos: Dict[str, set] = field(default_factory=dict)
     results: Optional[dict] = None
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -355,6 +358,12 @@ class JobManager:
             state["video_id"] = outcome.video_id
             state["reason"] = outcome.reason
 
+    def _stage_count(self, job: Job, key: str, video_id: str) -> int:
+        """Record that *video_id* reached *key*, and return how many have."""
+        seen = job.stage_videos.setdefault(key, set())
+        seen.add(video_id)
+        return len(seen)
+
     def _mark_stage(self, job: Job, key: str, status: str, progress: float | None = None, note: str = "") -> None:
         stage = job.stage(key)
         stage.status = status
@@ -381,21 +390,32 @@ class JobManager:
         if message.startswith("Fetching transcript:"):
             video_id = message.split(":", 1)[1].strip()
             self._touch_url(job, video_id, "running")
-            self._mark_stage(job, "fetch", "running", progress=done_urls / total,
-                             note=f"{done_urls}/{total} URLs")
+            n = self._stage_count(job, "fetch", video_id)
+            self._mark_stage(job, "fetch", "running", progress=n / total,
+                             note=f"{n}/{total} URLs")
         elif self._RE_CACHE.search(message):
             m = self._RE_CACHE.search(message)
             self._touch_url(job, m.group(1), "analyzed", note=f"cached · {m.group(2)} chunks")
-            self._mark_stage(job, "fetch", "running", progress=(done_urls + 1) / total)
+            n = self._stage_count(job, "fetch", m.group(1))
+            self._mark_stage(job, "fetch", "running", progress=n / total,
+                             note=f"{n}/{total} URLs")
         elif self._RE_CHUNKS.search(message):
             m = self._RE_CHUNKS.search(message)
             self._touch_url(job, m.group(1), "running", note=f"{m.group(3)} chunks")
-            self._mark_stage(job, "fetch", "done", progress=1.0)
-            self._mark_stage(job, "chunk", "running", progress=(done_urls + 1) / total)
-            self._mark_stage(job, "embed", "running", progress=(done_urls + 0.5) / total,
-                             note=f"{done_urls}/{total} videos embedded")
+            n = self._stage_count(job, "chunk", m.group(1))
+            self._mark_stage(job, "chunk", "running", progress=n / total,
+                             note=f"{n}/{total} videos")
+            self._mark_stage(job, "embed", "running", progress=(n - 0.5) / total,
+                             note=f"{n - 1}/{total} videos embedded")
         elif "running sentiment" in message:
-            self._mark_stage(job, "sentiment", "running", progress=(done_urls + 0.5) / total)
+            video_id = message.split(":", 1)[0].strip()
+            n = self._stage_count(job, "sentiment", video_id)
+            # Embedding for this video finished the moment sentiment started.
+            embedded = self._stage_count(job, "embed", video_id)
+            self._mark_stage(job, "embed", "running", progress=embedded / total,
+                             note=f"{embedded}/{total} videos embedded")
+            self._mark_stage(job, "sentiment", "running", progress=(n - 0.5) / total,
+                             note=f"{n - 1}/{total} videos scored")
         elif self._RE_ENTITIES.search(message):
             m = self._RE_ENTITIES.search(message)
             self._touch_url(job, m.group(1), "running", note="detecting entities")
@@ -404,12 +424,24 @@ class JobManager:
             # stage is closed together when the shared fit starts, which keeps
             # the progression monotone instead of showing sentiment finishing
             # before chunking.
-            self._mark_stage(job, "entities", "running", progress=(done_urls + 0.5) / total,
-                             note=f"{done_urls}/{total} videos")
+            n = self._stage_count(job, "entities", m.group(1))
+            # Sentiment for this video is finished once entity work begins.
+            scored = self._stage_count(job, "sentiment_done", m.group(1))
+            self._mark_stage(job, "sentiment", "running", progress=scored / total,
+                             note=f"{scored}/{total} videos scored")
+            self._mark_stage(job, "entities", "running", progress=(n - 0.5) / total,
+                             note=f"{n - 1}/{total} videos")
         elif message.startswith("Fitting topic model"):
-            # Everything per-video is finished by the time the shared fit starts.
-            for key in ("fetch", "chunk", "embed", "sentiment", "entities"):
-                self._mark_stage(job, key, "done", progress=1.0)
+            # Everything per-video is finished by the time the shared fit
+            # starts, so close those stages with their true final counts
+            # rather than leaving whatever the last in-flight note said.
+            analyzed = len(job.stage_videos.get("fetch", ())) or total
+            for key, unit in (
+                ("fetch", "URLs"), ("chunk", "videos"), ("embed", "videos embedded"),
+                ("sentiment", "videos scored"), ("entities", "videos"),
+            ):
+                seen = len(job.stage_videos.get(key, ())) or analyzed
+                self._mark_stage(job, key, "done", progress=1.0, note=f"{seen}/{total} {unit}")
             self._mark_stage(job, "topics", "running", progress=0.5, note=message)
         elif message.startswith("⚠ Skipping"):
             self._mark_stage(job, "fetch", "running", progress=(done_urls + 1) / total)
