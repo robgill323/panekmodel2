@@ -1,7 +1,7 @@
 evidence_bundle:
   artifact: src/panekmodel2/server/jobs.py
   produced_by: developer
-  worktree_ref: feature/cleanup-hardening
+  worktree_ref: feature/cleanup-hardening@5920fa3
   items:
     - id: E-1
       kind: test-run
