@@ -1,0 +1,85 @@
+evidence_bundle:
+  artifact: src/panekmodel2/topic_model_params.py
+  produced_by: developer
+  worktree_ref: feature/polish-wave@835ec55
+  items:
+    - id: E-1
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests -m "not slow"'
+      expect: {exit: 0}
+      cwd: "."
+
+    - id: E-2
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests -m slow -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+
+    - id: E-3
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests/test_topic_granularity.py -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+      # N-7: properties verified across n in 1..5000, not spot-checked.
+
+    - id: E-4
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests/test_follow_scroll.py -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+      # N-6 truncation guard and N-5 regex handling.
+
+    - id: E-5
+      kind: citation
+      ref: "src/panekmodel2/topic_model_params.py:36"
+      # GRANULARITY_LEVELS — per-level curves replacing the multiplier scheme
+      # that collapsed "fine" to a constant.
+
+    - id: E-6
+      kind: citation
+      ref: "src/panekmodel2/topic_model_params.py:70"
+      # min_cluster_size_for — each documented guarantee has a test.
+
+    - id: E-7
+      kind: citation
+      ref: "tests/test_follow_scroll.py:257"
+      # _assert_whole_body — independent balance check; rejects a truncated
+      # body before an absence assertion can pass vacuously.
+
+    - id: E-8
+      kind: citation
+      ref: "tests/test_follow_scroll.py:139"
+      # _skip_regex — N-5 remnant; unterminated literals raise rather than
+      # being guessed at.
+
+    - id: E-9
+      kind: human-attested
+      claim: "N-7 was confirmed before being fixed: min_cluster_size_for returned exactly one distinct value for 'fine' across n=1..5000, and equalled 'standard' for the 10 smallest corpora. round(5*0.5) is 2 under banker's rounding, which is the floor, so the documented multiplier design collapsed silently. After the rewrite, a sweep over n=1..5000 reports zero violations of five properties: standard byte-identical to the pre-knob function, fine never coarser, coarse never finer, strict ordering wherever the floor and corpus cap allow, and 2 <= m <= max(2,n)."
+
+    - id: E-10
+      kind: human-attested
+      claim: "All five mutations turn tests red, each verified by applying and reverting it: fine collapsed to a constant (1 failure), standard drifted from byte-identical (2), coarse flattened to standard's curve (6), the truncation-guard call deleted from js_function_body (1), regex skipping removed from the brace scanner (3)."
+
+    - id: E-11
+      kind: human-attested
+      claim: "Mutation testing caught three weak tests of my own in this task, each the same shape as the finding being fixed. (1) Deleting the N-6 guard's CALL failed nothing, because every N-6 test invoked the guard directly - definition covered, wiring not, which is N-4 exactly; now pinned by patching in a deliberately truncating matcher and asserting the public function still raises. (2) The verifier reused the scanner it was verifying, so a truncating scanner produced a truncated body and then pronounced it balanced; the depth logic is now independent and only literal-skipping primitives are shared. (3) The regex test used /\\d{2,}/, whose braces balance, so removing regex handling left it green; now parametrised over genuinely unbalanced literals."
+
+    - id: E-12
+      kind: fixture-provenance
+      fixture: tests/test_topic_granularity.py
+      synthetic: true
+      # Exhaustive sweep over integer corpus sizes plus a transcription of the
+      # pre-knob function as the byte-identical oracle. No weights, no
+      # transcripts: this pins arithmetic, not topic quality.
+
+    - id: E-13
+      kind: assumed
+      claim: "Whether coarse and fine produce better topics on real transcripts is still NOT verified - unchanged from story-3c. The curve numbers (tiny/small/ceiling/divisor per level) are a considered starting point chosen so the ordering and bounds hold, not a result tuned against real corpora. The 13-video under-splitting observation that motivated the knob came from the human, not from a run I made."
+
+    - id: E-14
+      kind: assumed
+      claim: "The regex heuristic is the usual preceding-token rule, not a JavaScript parser. It is correct for this codebase and for the parametrised cases, and an unterminated literal raises rather than mis-scoping - but a sufficiently odd construct could still fool it, and there is no JS parser here to check against."
+
+    - id: E-15
+      kind: assumed
+      claim: "The granularity picker's rendering was not re-inspected in a browser for this change. A test pins that the SPA offers exactly the three supported levels, so picker/backend drift fails, but the panel's appearance and the README table's agreement with the code are verified by reading."
