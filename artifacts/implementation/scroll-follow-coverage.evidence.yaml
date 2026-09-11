@@ -1,0 +1,75 @@
+evidence_bundle:
+  artifact: src/panekmodel2/server/static/follow.js
+  produced_by: developer
+  worktree_ref: feature/scroll-follow-coverage@c5c3e7d
+  items:
+    - id: E-1
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests -m "not slow"'
+      expect: {exit: 0}
+      cwd: "."
+
+    - id: E-2
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests -m slow -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+
+    - id: E-3
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests/test_follow_scroll.py -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+
+    - id: E-4
+      kind: citation
+      ref: "src/panekmodel2/server/static/follow.js:73"
+      # shouldFollow — scrolling requires playing AND enabled. Highlighting is
+      # deliberately not part of this decision; only scrolling pauses.
+
+    - id: E-5
+      kind: citation
+      ref: "src/panekmodel2/server/static/follow.js:84"
+      # isReaderScroll — our own programmatic scroll is not the reader taking
+      # over. This is the logic behind the worst of the four mutations.
+
+    - id: E-6
+      kind: citation
+      ref: "src/panekmodel2/server/static/follow.js:92"
+      # followChipHidden — the chip is the only way back, so it is visible
+      # exactly when follow is off.
+
+    - id: E-7
+      kind: citation
+      ref: "tests/test_follow_scroll.py:134"
+      # js_function_body — scopes each call-site assertion to its enclosing
+      # function by brace matching. File-wide substring checks are precisely
+      # why N-4 slipped through.
+
+    - id: E-8
+      kind: human-attested
+      claim: "The acceptance criterion was run, not assumed. All four of the reviewer's mutations were applied to app.js one at a time and each turns tests red - M1 deleting the bindTranscriptFollow() call in render(), M2 dropping setFollow(true) from the data-video click branch, M3 never setting programmaticScroll = true in followRow, M4 setFollow no longer touching chip.hidden. Each was reverted and the suite confirmed green again. Before this task all four left the suite passing."
+
+    - id: E-9
+      kind: human-attested
+      claim: "N-2 verified on both paths rather than reasoned about. With node removed from PATH the file reports 10 passed / 23 skipped - the static source guards still run, which was the point of the split - and with node present 33 pass. My first attempt to verify this was wrong: I shadowed node with a stub that exits 127, which shutil.which still finds, so skipif never triggered and the node tests failed instead of skipping. That was my harness being wrong, not the split; re-run with node genuinely absent from PATH."
+
+    - id: E-10
+      kind: human-attested
+      claim: "The scoping helper is load-bearing for six assertions, so it has its own test proving it isolates one function's body from another's and raises on a missing name. Without that, a silently broken helper would make every call-site assertion vacuous - the same shape of failure as N-4 itself."
+
+    - id: E-11
+      kind: fixture-provenance
+      fixture: tests/test_follow_scroll.py
+      synthetic: true
+      # Inputs are hand-chosen geometry (row/container offsets and heights) and
+      # small state objects. Nothing is captured from a browser; there is no
+      # browser in this environment.
+
+    - id: E-12
+      kind: assumed
+      claim: "The listener ATTACHMENT itself is still not behaviorally tested. That bindTranscriptFollow() is called from render()'s video branch, and that it registers a scroll handler consulting isReaderScroll, are both source-text assertions - scoped to the right function, but still source text. Only a real DOM could prove the handler fires on a real scroll event, and no browser-automation library is available here."
+
+    - id: E-13
+      kind: assumed
+      claim: "The end-to-end behaviour the human reported - playback dragging the page, and the fight for the viewport when scrolling back - has still never been reproduced or replayed automatically at any point in this chain. Every layer under it is now covered, which is a different and weaker claim than the symptom being pinned. It remains a hand-test."
