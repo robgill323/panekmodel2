@@ -168,6 +168,11 @@ PROBES = [
     ("GET", "/api/runs/any-job"),
     ("GET", "/api/runs/any-job/results"),
     ("GET", "/api/runs/any-job/export/combined.csv"),
+    # Story-5's channel route. Bare path, deliberately: with credentials it
+    # answers 422 (missing `url`) before yt-dlp is reached. A query string
+    # would both keep the prover below red (the probe set compares paths
+    # verbatim) and make the auth suite fetch from YouTube for real.
+    ("GET", "/api/channel/videos"),
     ("GET", "/api/docs"),
     ("GET", "/openapi.json"),
     # FastAPI registers these whether or not anyone asked for them. /redoc is

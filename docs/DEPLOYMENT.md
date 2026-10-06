@@ -169,6 +169,12 @@ printf 'THROUGHLINE_PASSWORD=%s\n' "$(python3 -c 'import secrets; print(secrets.
 chmod 600 .env
 ```
 
+Keep every value in `.env` **unquoted** (`KEY=value`, never `KEY="value"`):
+the shell, systemd's `EnvironmentFile=`, Docker Compose and the application's
+own settings loader each treat quotes differently, so a quoted password can
+be one string to the server and another to the healthcheck or your browser.
+The generated password needs no quoting.
+
 Then give it to the people who need it through a channel that is not plain
 email (a password manager share, or in person).
 
