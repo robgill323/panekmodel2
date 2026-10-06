@@ -242,6 +242,17 @@ def test_fetch_clamps_the_count_and_calls_the_endpoint():
     assert "new URLSearchParams(" in body
 
 
+def test_fetch_results_render_without_stealing_focus():
+    """A listing that lands while the researcher types in the URL textarea must
+    put them back where they were. Source-level only: the behaviour itself was
+    checked once in headless Chrome, which this suite cannot repeat."""
+    assert "renderKeepingFocus('#pick-status')" in js_function_body(app(), "fetchChannel")
+    body = js_function_body(app(), "renderKeepingFocus")
+    assert "document.getElementById(id)" in body
+    assert "back.focus()" in body
+    assert body.index("render()") < body.index("back.focus()")
+
+
 def test_fetch_ignores_a_superseded_response():
     """Two quick fetches: the slower first one must not overwrite the second."""
     body = js_function_body(app(), "fetchChannel")

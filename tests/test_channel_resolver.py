@@ -156,6 +156,14 @@ def test_accepted_forms_are_rebuilt_canonically(raw, expected):
     "https://www.youtube.com/@na sa", "https://www.youtube.com/@ナサ", "@NA\nSA", "@NASA\x00",
     "https://www.youtube.com/@NASA\\videos",
     "https://www.youtube.com/@" + "a" * 400,
+    # urlsplit silently DELETES \t \r \n, so without an explicit check these
+    # would be accepted as @NASA. Found by mutation, not by inspection.
+    "https://www.youtube.com/@NA\nSA", "https://www.youtube.com/@NA\tSA",
+    "https://www.youtube.com/@NA\rSA",
+    # The query is dropped, but the input is still refused whole: oversize or
+    # non-ASCII anywhere means it is not a pasted channel link.
+    "https://www.youtube.com/@NASA?si=" + "a" * 400,
+    "https://www.youtube.com/@NASA?q=ナサ",
 ])
 def test_everything_else_is_refused(raw):
     with pytest.raises(ChannelError) as info:
@@ -238,16 +246,19 @@ def test_options_bound_the_network_wait():
     assert 0 < opts["socket_timeout"] <= cr.FETCH_TIMEOUT_SECONDS
 
 
-def test_real_yt_dlp_with_these_options_refuses_a_non_youtube_url():
+def test_real_yt_dlp_with_these_options_refuses_a_non_youtube_url(capfd):
     """Defence in depth behind the validator, checked against real yt-dlp.
 
     file:// is claimed by no extractor in the allow-list, so this fails inside
-    yt-dlp before any I/O happens — it runs offline.
+    yt-dlp before any I/O happens — it runs offline. It also shows the quiet
+    logger working: yt-dlp prints ERROR lines to stderr even with quiet=True,
+    which would otherwise land in the server's terminal on every bad channel.
     """
     yt_dlp = pytest.importorskip("yt_dlp")
     with yt_dlp.YoutubeDL(ydl_options(1)) as real:
         with pytest.raises(yt_dlp.utils.DownloadError, match="No suitable extractor"):
             real.extract_info("file:///etc/passwd", download=False)
+    assert "No suitable extractor" not in capfd.readouterr().err
 
 
 # ── what comes back out ─────────────────────────────────────────────
@@ -431,6 +442,18 @@ def test_the_fetch_is_timed_out(ydl, monkeypatch):
         list_channel_videos("@slow", 5, timeout=0.05)
     assert err.value.kind == "timeout"
     assert err.value.status == 504
+
+
+def test_an_abandoned_fetch_cannot_hold_up_process_exit(ydl):
+    """The overrunning worker is left behind on timeout, so it must be a daemon:
+    a non-daemon thread stuck on a socket would keep `panekmodel2 ui` alive
+    after Ctrl-C until yt-dlp gave up."""
+    ydl.gate = threading.Event()
+    with pytest.raises(ChannelError):
+        list_channel_videos("@slow", 5, timeout=0.05)
+    stuck = [t for t in threading.enumerate() if t.name == cr.FETCH_THREAD_NAME and t.is_alive()]
+    assert stuck, "the abandoned worker should still be running at this point"
+    assert all(t.daemon for t in stuck)
 
 
 def test_the_module_timeout_applies_by_default(ydl, monkeypatch):
