@@ -1,0 +1,40 @@
+# Keep the build context small, and keep secrets and host state out of it.
+#
+# The Dockerfile only COPYs named paths, so this is the second line of
+# defence: anything excluded here cannot reach a layer even if a later edit
+# adds a broader COPY.
+
+# Secrets. .env is first for a reason: it is the file most likely to hold
+# THROUGHLINE_PASSWORD, YOUTUBE_API_KEY and HF_TOKEN, and anything copied into
+# an image is readable by anyone who can read the image.
+.env
+.env.*
+*.pem
+*.key
+# Google client-credential files an older checkout may still have on disk.
+credentials*.json
+client_secret*.json
+token*.json
+
+# Host-specific build products. A macOS .venv in a Linux image is useless and
+# large.
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Version control and tooling.
+.git/
+.gitignore
+.claude/
+.DS_Store
+
+# Process artifacts and anything not needed at runtime.
+artifacts/
+docs/
+tests/
+scripts/

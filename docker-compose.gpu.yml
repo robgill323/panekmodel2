@@ -1,0 +1,34 @@
+# GPU override — UNTESTED-PENDING-RIG.
+#
+# Nothing in this file has been executed. There was no NVIDIA GPU, no NVIDIA
+# Container Toolkit and no running Docker daemon where it was written, and the
+# target workstation's GPU and driver are not known. It is a starting point to
+# verify on the rig, not a working configuration.
+#
+#     docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+#
+# Prerequisites on the host, in order:
+#   1. An NVIDIA driver. `nvidia-smi` reports the maximum CUDA version the
+#      driver supports.
+#   2. The NVIDIA Container Toolkit. Verify it independently of this project:
+#        docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
+#   3. TORCH_INDEX_URL matching the driver from step 1. cu124 below is a
+#      PLACEHOLDER, not a recommendation. A mismatch usually shows up as
+#      torch.cuda.is_available() == False with no error at all.
+#
+# Expect the image to grow by roughly 2-3 GB (the nvidia-* runtime wheels).
+
+services:
+  throughline:
+    build:
+      args:
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}
+    environment:
+      CUDA: "true"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${GPU_COUNT:-1}
+              capabilities: [gpu]

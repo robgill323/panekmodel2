@@ -27,8 +27,26 @@ panekmodel2 ui              # serves http://127.0.0.1:8000 and opens a browser
 panekmodel2 ui --port 9000 --no-open
 ```
 
-The server binds `127.0.0.1` by default. It has no authentication and runs
-unbounded compute on request, so do not bind a public interface.
+The server binds `127.0.0.1` by default, which needs no password because only
+this machine can reach it. Binding anything else **requires**
+`THROUGHLINE_PASSWORD`:
+
+```bash
+export THROUGHLINE_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+panekmodel2 ui --host 0.0.0.0 --no-open
+```
+
+Without it, a non-loopback bind exits (status 2) rather than starting — this
+runs unbounded compute on request. When the password is set, every route
+requires it: the UI, its static assets, `/api/*`, the CSV exports and the API
+docs. Browsers get their normal password prompt (HTTP Basic; the username is
+ignored); scripts can send `Authorization: Bearer $THROUGHLINE_PASSWORD`.
+Basic credentials are base64, not encrypted, so off a trusted network reach it
+through an SSH tunnel, Tailscale or a TLS proxy. There is no rate limiting, so
+use a generated password.
+
+To run it permanently on a workstation under Docker, see
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 Results are session-scoped: they live in the server process and are discarded
 when it stops. Export before quitting. Runs are executed one at a time — the
@@ -53,7 +71,14 @@ This will:
 
 ## Configuration
 
-Environment variables (or .env) via pydantic BaseSettings:
+`THROUGHLINE_PASSWORD` is read straight from the environment and is
+deliberately **not** a `Settings` field — `Settings` is serialized into
+`/api/health`, into every run's results and into the metadata of every CSV
+export, so a secret stored there would be one edit away from being published.
+A blank value counts as unset. There is no `--password` CLI flag either: a
+secret on the command line lands in shell history and in `ps` output.
+
+The rest are environment variables (or .env) via pydantic BaseSettings:
 
 - `YOUTUBE_API_KEY` — optional, and used **only** to fetch video metadata
   (title, channel, publish date). It cannot fetch captions. Without it, metadata
@@ -151,6 +176,20 @@ pip install -e '.[dev]'
 pytest                  # fast suite; model weights are stubbed
 pytest -m slow          # adds real BERTopic fits (downloads all-MiniLM-L6-v2)
 ```
+
+For a reproducible environment, install from the hash-pinned locks instead.
+They are generated from `pyproject.toml` by pip-tools (`pyproject.toml` is the
+input; there is no separate `requirements.in` to drift from it):
+
+```bash
+pip install --require-hashes -r requirements-dev.lock
+pip install --no-deps -e .
+./scripts/lock.sh       # regenerate after changing a dependency
+```
+
+A lock is only valid for the platform and Python version that produced it; the
+committed ones are macOS/arm64 + Python 3.12. See
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) §12.
 
 ## Outputs
 

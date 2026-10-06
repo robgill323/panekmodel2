@@ -161,6 +161,17 @@ class PasswordGateMiddleware:
     this is what makes a browser show a prompt) and ``Bearer`` (curl, the
     container healthcheck, scripted exports).
 
+    Why HTTP Basic rather than a session cookie and a login page: it is the
+    simpler of the two by every measure that matters for a single shared
+    password. A cookie scheme needs a login route left *outside* the gate, a
+    signing key to generate and rotate, expiry, and CSRF protection on every
+    state-changing POST — each one a new place to get the bypass wrong. Basic
+    has no state on the server at all, the browser supplies the prompt and
+    re-sends the credential on every same-origin request (including the SPA's
+    ``fetch`` calls), and there is no page to keep in sync with the SPA. The
+    costs — no logout, and base64 on the wire — are documented in
+    docs/DEPLOYMENT.md rather than hidden.
+
     Nothing is logged per request — not the header, not a failure, not the
     client address. An unauthenticated stranger must not be able to drive log
     volume, and the ``Authorization`` header is the one string that must never

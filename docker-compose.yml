@@ -1,0 +1,88 @@
+# Throughline — one service, one workstation, running permanently.
+#
+# NOT PUBLISHED: `image:` is a bare local tag with no registry host, and
+# nothing here pushes anywhere. Build on the machine that runs it:
+#
+#     docker compose up -d --build        # reads THROUGHLINE_PASSWORD from .env
+#
+# See docs/DEPLOYMENT.md. Every rig-specific value is an environment variable
+# with a conservative default, because the target rig is not known.
+
+services:
+  throughline:
+    build:
+      context: .
+      args:
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        REQUIREMENTS_FILE: ${REQUIREMENTS_FILE:-}
+    image: throughline:local
+    container_name: throughline
+
+    environment:
+      # Compose refuses to start at all without this — a second, earlier
+      # enforcement of the rule the server applies at bind time, so the
+      # operator finds out before a container exists, not from a restart loop.
+      # Quoted: the message contains characters YAML would read as structure.
+      THROUGHLINE_PASSWORD: "${THROUGHLINE_PASSWORD:?is required - see docs/DEPLOYMENT.md section 3}"
+
+      # Optional. Empty is fine: metadata falls back to yt-dlp.
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+      # Optional. Only needed for gated Hugging Face models.
+      HF_TOKEN: ${HF_TOKEN:-}
+
+      # Pipeline settings, all optional; the application defaults restated so
+      # this file doubles as the list of what is tunable.
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-mpnet-base-v2}
+      SENTIMENT_MODEL: ${SENTIMENT_MODEL:-cardiffnlp/twitter-roberta-base-sentiment-latest}
+      TOPIC_GRANULARITY: ${TOPIC_GRANULARITY:-standard}
+      TOPIC_REDUCE_TO: ${TOPIC_REDUCE_TO:-10}
+      CHUNK_MAX_SECONDS: ${CHUNK_MAX_SECONDS:-60}
+      USE_WHISPER_FALLBACK: ${USE_WHISPER_FALLBACK:-false}
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      # CPU by default. The GPU override flips this.
+      CUDA: ${CUDA:-false}
+
+    ports:
+      # The host side defaults to LOOPBACK. Reaching this from another machine
+      # is an explicit decision (THROUGHLINE_BIND_ADDR), not a side effect of
+      # `up -d`. See docs/DEPLOYMENT.md section 6 for the access options.
+      - "${THROUGHLINE_BIND_ADDR:-127.0.0.1}:${THROUGHLINE_PORT:-8000}:8000"
+
+    volumes:
+      # Fetched transcripts and per-chunk results (the pipeline's disk cache).
+      - throughline-transcripts:/home/throughline/.panekmodel2_cache
+      # Model weights: Hugging Face (~2 GB on first run), Whisper, torch hub,
+      # and NLTK data (NLTK_DATA points inside it). Without this volume every
+      # recreate re-downloads them.
+      - throughline-models:/home/throughline/.cache
+      # Files written by CLI commands run inside the container (e.g.
+      # `panekmodel2 fetch ... --outfile /home/throughline/exports/x.json`).
+      # The web UI's CSV exports download to the browser, not here.
+      - throughline-exports:/home/throughline/exports
+
+    restart: unless-stopped
+
+    # Runs are long and serialized (D-4), and results live only in the server
+    # process — a stop discards anything not yet exported. Give a run in
+    # flight longer than the default 10s.
+    stop_grace_period: 120s
+
+    # Unbounded compute on request is this application's defining risk. Left
+    # unset by default: a wrong limit on an unknown rig OOM-kills a run
+    # mid-batch, which is worse than no limit. Set once the rig is known.
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: "8"
+    #       memory: 16g
+
+# Explicit names, so the backup and restore commands in docs/DEPLOYMENT.md do
+# not depend on the directory the checkout happens to live in (Compose would
+# otherwise prefix each with the project name).
+volumes:
+  throughline-transcripts:
+    name: throughline-transcripts
+  throughline-models:
+    name: throughline-models
+  throughline-exports:
+    name: throughline-exports

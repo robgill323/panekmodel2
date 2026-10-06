@@ -34,6 +34,9 @@ license = { text = "MIT" }
 dev = [
   "pytest>=8.0.0",
   "httpx>=0.27.0",
+  # tests/test_packaging.py parses the compose files. Named here rather than
+  # relied on transitively (transformers happens to pull it in today).
+  "pyyaml>=6.0",
 ]
 
 [project.urls]

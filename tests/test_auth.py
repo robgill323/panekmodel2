@@ -273,6 +273,62 @@ def test_bad_credentials_are_rejected(gated, header):
     assert gated.get("/api/health", headers=header).status_code == 401
 
 
+def test_every_authorization_header_is_considered(gated):
+    """A valid credential behind a decoy still authenticates; two decoys do not.
+
+    Pins the documented "any matching header" rule, so a refactor to
+    first-header-only is a visible behaviour change rather than a silent one.
+    """
+    decoy = ("Authorization", "Bearer not-it")
+    valid = ("Authorization", basic(PASSWORD)["Authorization"])
+    assert gated.get("/api/health", headers=[decoy, valid]).status_code == 200
+    assert gated.get("/api/health", headers=[decoy, decoy]).status_code == 401
+
+
+def test_a_websocket_is_refused_without_credentials(settings, cache_home, monkeypatch):
+    """The websocket branch of the gate, which no current route exercises.
+
+    A route is added AFTER the gate is armed, which also demonstrates that the
+    gate covers routes registered later. Without credentials the handshake is
+    closed with 1008 (policy violation); with them, it is accepted.
+    """
+    from starlette.websockets import WebSocketDisconnect
+
+    monkeypatch.setattr("panekmodel2.server.app.get_settings", lambda: settings)
+    app = create_app(JobManager(runner_factory=FakeRunner), password=PASSWORD)
+
+    async def echo(ws):
+        await ws.accept()
+        await ws.send_text("hello")
+        await ws.close()
+
+    # Inserted ahead of the "/" StaticFiles mount, which would otherwise
+    # match first (mounts are prefix matches) and reject the websocket scope.
+    from starlette.routing import WebSocketRoute
+
+    app.router.routes.insert(0, WebSocketRoute("/ws-probe", echo))
+    with TestClient(app) as client:
+        with pytest.raises(WebSocketDisconnect) as excinfo:
+            with client.websocket_connect("/ws-probe"):
+                pass
+        assert excinfo.value.code == 1008
+
+        with client.websocket_connect("/ws-probe", headers=bearer(PASSWORD)) as ws:
+            assert ws.receive_text() == "hello"
+
+
+@pytest.mark.parametrize("scheme", ["Digest", "Negotiate", "Token", "Foo"])
+def test_only_basic_and_bearer_carry_the_password(gated, scheme):
+    """The right password under any other scheme is still refused.
+
+    Not a bypass either way (the password is required regardless), but the
+    documented contract is "Basic or Bearer", and accepting arbitrary schemes
+    survived the mutation run until this pinned it (M11).
+    """
+    res = gated.get("/api/health", headers={"Authorization": f"{scheme} {PASSWORD}"})
+    assert res.status_code == 401
+
+
 def test_wrong_basic_password_is_rejected(gated):
     assert gated.get("/api/health", headers=basic("wrong")).status_code == 401
     assert gated.get("/api/health", headers=basic("")).status_code == 401
@@ -299,6 +355,28 @@ def test_the_password_is_compared_in_constant_time():
     assert "hmac.compare_digest" in source
     assert "self._password ==" not in source
     assert "offered == " not in source
+
+
+def test_every_credential_decision_goes_through_compare_digest(gated, monkeypatch):
+    """The behavioural half of the test above, which only reads source text.
+
+    A mutation to ``offered.encode() == self._expected`` keeps every source
+    assertion true and every accept/reject test green — the decision is still
+    right, only the timing leaks. Spying on the primitive catches it: both an
+    accepted and a rejected credential must have been decided by it.
+    """
+    calls = []
+    real = auth.hmac.compare_digest
+
+    def spy(a, b):
+        calls.append((a, b))
+        return real(a, b)
+
+    monkeypatch.setattr(auth.hmac, "compare_digest", spy)
+    assert gated.get("/api/health", headers=bearer(PASSWORD)).status_code == 200
+    assert len(calls) == 1
+    assert gated.get("/api/health", headers=basic("wrong")).status_code == 401
+    assert len(calls) == 2
 
 
 def test_the_middleware_refuses_to_arm_with_a_blank_password():
@@ -407,7 +485,7 @@ def test_the_cli_serves_an_open_interface_once_a_password_is_set(monkeypatch):
     called = {}
 
     def fake_run(app, **kwargs):
-        called.update(kwargs)
+        called.update(kwargs, app=app)
 
     import uvicorn
 
@@ -417,6 +495,13 @@ def test_the_cli_serves_an_open_interface_once_a_password_is_set(monkeypatch):
     assert result.exit_code == 0, result.output
     assert called["host"] == "0.0.0.0"
     assert "Authentication required" in flat(result.output)
+
+    # The app actually handed to uvicorn must be the gated one. Without this,
+    # serve() building create_app(password=None) — an open server on 0.0.0.0
+    # with the password set — passed the whole suite (mutation M09).
+    served = TestClient(called["app"])
+    assert served.get("/").status_code == 401
+    assert served.get("/", headers=bearer(PASSWORD)).status_code == 200
 
 
 def test_the_cli_serves_loopback_with_no_password(monkeypatch):
