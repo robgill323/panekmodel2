@@ -1,9 +1,11 @@
 evidence_bundle:
   artifact: docs/DEPLOYMENT.md
   produced_by: developer
-  worktree_ref: feature/packaging-baseline-2@fcb4bfc
+  worktree_ref: feature/packaging-baseline-2@64b35bf
   # History: 0557ccf (auth gate, ce23bb7 replayed onto main@087b444) ->
-  # 82859e0 (packaging) -> fcb4bfc (review-11 fix cycle, retry 1/2).
+  # 82859e0 (packaging) -> fcb4bfc (review-11 fix cycle; APPROVED by
+  # review-13) -> 3640d7b (merge of main@36934e6, story-5, no conflicts)
+  # -> 64b35bf (channel-route probe + runbook nit N-3).
   # feature/packaging-baseline (ce23bb7) is still checked out in the dead
   # agent's worktree and was left untouched. Push to origin was denied by the
   # permission system and not retried; the branch exists only in the local
@@ -15,14 +17,16 @@ evidence_bundle:
       expect: {exit: 0}
       cwd: "."
       # In the capturing worktree, .venv was built ONLY from
-      # requirements-dev.lock (see E-11). 558 passed, 8 slow deselected.
+      # requirements-dev.lock (see E-17). After the merge: 805 passed,
+      # 8 slow deselected (the reviewer's trial merge predicted 805).
 
     - id: E-2
       kind: test-run
       cmd: '.venv/bin/python -m pytest tests/test_auth.py -p no:randomly'
       expect: {exit: 0}
       cwd: "."
-      # The gate, the bind refusal and their leak paths: 136 tests.
+      # The gate, the bind refusal and their leak paths: 138 tests,
+      # including the probe of story-5's /api/channel/videos.
 
     - id: E-3
       kind: test-run
@@ -38,6 +42,14 @@ evidence_bundle:
       expect: {exit: 0}
       cwd: "."
       # B-1: Settings against the runbook's own .env (6 tests).
+
+    - id: E-29
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests -m slow'
+      expect: {exit: 0}
+      cwd: "."
+      # Real model weights (from the local HF cache) under the LOCKED library
+      # versions: 8 passed. Closes the former E-28 gap.
 
     - id: E-5
       kind: file-exists
@@ -81,18 +93,18 @@ evidence_bundle:
 
     - id: E-10
       kind: citation
-      ref: "tests/test_auth.py:506"
+      ref: "tests/test_auth.py:511"
       # A-1: uvicorn.run stubbed to pytest.fail in the bind-refusal CLI test.
 
     - id: E-11
       kind: citation
-      ref: "tests/test_auth.py:382"
+      ref: "tests/test_auth.py:387"
       # A-4: the gate is user_middleware[0] (outermost); app.py:101's comment
       # now states Starlette's last-added-is-outermost rule correctly.
 
     - id: E-12
       kind: citation
-      ref: "tests/test_auth.py:393"
+      ref: "tests/test_auth.py:398"
       # Cross-site-shaped POST /api/runs (no type / text/plain / form) -> 422
       # even with Basic credentials attached.
 
@@ -104,8 +116,8 @@ evidence_bundle:
 
     - id: E-14
       kind: citation
-      ref: "src/panekmodel2/server/app.py:189"
-      # serve() hands uvicorn the gated app; pinned at tests/test_auth.py:540.
+      ref: "src/panekmodel2/server/app.py:204"
+      # serve() hands uvicorn the gated app; pinned at tests/test_auth.py:545.
 
     - id: E-15
       kind: citation
@@ -117,6 +129,19 @@ evidence_bundle:
       ref: "docs/DEPLOYMENT.md:127"
       # B-1 runbook fix: on the native path the password must be in the process
       # environment; the server never reads it from .env.
+
+    - id: E-30
+      kind: citation
+      ref: "tests/test_auth.py:175"
+      # The story-5 integration probe, bare path ("GET", "/api/channel/videos"):
+      # with credentials -> 422 before yt-dlp is reached. Before it was added,
+      # the merged tree failed test_every_registered_route_is_probed (verified
+      # red, 1 failed / 135 passed), as that prover is designed to.
+
+    - id: E-31
+      kind: citation
+      ref: "docs/DEPLOYMENT.md:172"
+      # Review nit N-3: keep .env values unquoted.
 
     - id: E-17
       kind: human-attested
@@ -168,4 +193,4 @@ evidence_bundle:
 
     - id: E-28
       kind: assumed
-      claim: "The slow suite (8 tests, real model weights) was not run in the lock-built venv. The diff touches no pipeline code, but the lock resolves newer library versions than the shared .venv, so real-model behaviour under the locked versions is unverified."
+      claim: "The 28-mutation run (E-19) was executed at the fcb4bfc tree, before the merge of main@36934e6. It was not re-run after the merge. The merge touched none of the mutated lines' files except app.py, where story-5 added a route; the full suite (805) and the auth suite (138) were re-run after it. The slow suite's 8 tests used model weights already in the local Hugging Face cache, not a fresh download."
