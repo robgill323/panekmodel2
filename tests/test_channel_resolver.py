@@ -455,13 +455,31 @@ def test_the_channel_base_is_removed_wherever_the_error_echoes_it():
     assert classify_error(RuntimeError(text), echoed="@privatelab").kind == "failed"
 
 
-def test_the_listing_passes_its_own_base_to_the_classifier(ydl):
-    ydl.error = RuntimeError(
-        "ERROR: [youtube:tab] c/privatelab/videos: Failed fetching /c/privatelab/videos"
-    )
+@pytest.mark.parametrize("echo", [
+    "/c/privatelab/videos",
+    "/c/privatelab?continuation=4qmFsgK",  # the base alone, without the tab suffix
+])
+def test_the_listing_passes_its_own_base_to_the_classifier(ydl, echo):
+    ydl.error = RuntimeError(f"ERROR: [youtube:tab] c/privatelab/videos: Failed fetching {echo}")
     with pytest.raises(ChannelError) as err:
         list_channel_videos("https://www.youtube.com/c/privatelab", 5)
     assert err.value.kind == "failed"
+
+
+def test_an_unwrapped_extractor_error_is_stripped_too(ydl):
+    """ExtractorError formats as "[ie] id: msg" with no "ERROR:", and one can
+    escape unwrapped — tab pages are fetched lazily, inside the worker's own
+    drain of the entries rather than inside extract_info."""
+    from yt_dlp.utils import ExtractorError
+
+    raw = ExtractorError("The read operation timed out", ie="youtube:tab", video_id="@privatelab/videos")
+    assert str(raw).startswith("[youtube:tab] @privatelab/videos: ")
+    assert classify_error(raw).kind == "unreachable"
+    ydl.error = ExtractorError("This channel does not exist.", ie="youtube:tab",
+                               video_id="@unavailableband/videos", expected=True)
+    with pytest.raises(ChannelError) as err:
+        list_channel_videos("@unavailableband", 5)
+    assert err.value.kind == "not_found"
 
 
 def test_a_transport_failure_is_unreachable_whatever_the_text_says():
