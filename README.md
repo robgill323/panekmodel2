@@ -94,8 +94,11 @@ The rest are environment variables (or .env) via pydantic BaseSettings:
 
 Retired in 0.2.0: `GOOGLE_CREDENTIALS_FILE` and `GOOGLE_TOKEN_FILE`, which
 configured the OAuth captions tier. Leaving them in a `.env` is harmless — they
-are ignored — and the app logs one INFO line at startup saying so rather than
-letting a formerly load-bearing variable vanish silently.
+are ignored, as is any `.env` key that is not a setting (such as
+`THROUGHLINE_PASSWORD` or the Docker-only keys). When they are set in the
+process *environment*, the app logs one INFO line at startup saying so rather
+than letting a formerly load-bearing variable vanish silently; keys that live
+only in `.env` are ignored without that line.
 
 ## Notes
 
@@ -183,7 +186,7 @@ input; there is no separate `requirements.in` to drift from it):
 
 ```bash
 pip install --require-hashes -r requirements-dev.lock
-pip install --no-deps -e .
+pip install --no-deps --no-build-isolation -e .   # build backend from the lock too
 ./scripts/lock.sh       # regenerate after changing a dependency
 ```
 

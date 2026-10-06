@@ -124,6 +124,22 @@ Restart=on-failure
 WantedBy=multi-user.target
 ```
 
+**On this native path the password must be in the process *environment*.**
+The server reads `THROUGHLINE_PASSWORD` from its environment only — it does
+**not** read it out of `.env`. Under systemd, the `EnvironmentFile=` line above
+is what exports it. From a shell, export it yourself:
+
+```bash
+set -a; . /opt/throughline/.env; set +a      # exports every line of .env
+panekmodel2 ui --host 0.0.0.0 --no-open
+```
+
+A `.env` that is present but not exported leaves a loopback server open with
+no password, and refuses a network bind with "THROUGHLINE_PASSWORD is not
+set" while you can see it sitting in the file. (The other keys in `.env` —
+model choices and the like — *are* read from the file by the application
+itself, and keys it does not use are ignored.)
+
 ---
 
 ## 3. Password setup
@@ -140,7 +156,11 @@ whole brute-force defence. The server logs a warning at startup if it is under
 
 Put it in `.env` at the top of the checkout. That file is listed in
 `.gitignore` (never committed) and `.dockerignore` (never copied into the
-image), and `docker compose` reads it automatically:
+image). Under Docker, `docker compose` reads it automatically and passes the
+password into the container's environment. On the native path (§2.2) the
+file must also be *exported* into the server's environment — systemd's
+`EnvironmentFile=` or `set -a; . .env; set +a` — because the server reads the
+password from its environment, never from the file:
 
 ```bash
 cd /opt/throughline
@@ -460,7 +480,9 @@ Distinguishing these matters more than this document looking finished.
   schemes; malformed credentials; the blank-password case; the CLI exit code;
   and real-socket tests through a running uvicorn server.
 - No credential appears in any log record, checked over a real connection with
-  uvicorn at its most verbose (`trace`) level and every logger captured.
+  uvicorn at its most verbose (`trace`) level, with the `panekmodel2` and
+  uvicorn loggers captured. (Other libraries' DEBUG output is covered by a
+  separate in-process test with the root logger at DEBUG, not by this one.)
 - Mutation testing of the auth enforcement (each mutation verified applied,
   then the suite run); the results are in the evidence bundle
   `artifacts/implementation/packaging.evidence.yaml`.
@@ -511,7 +533,9 @@ PYTHON=/tmp/lockenv/bin/python ./scripts/lock.sh
 The pip-tools version is pinned on purpose: 7.6.1 builds the PyPI JSON-API
 URL wrongly and silently falls back to downloading every wheel of every
 platform just to hash it (it passed 22 GB of torch wheels before being
-stopped). `lock.sh` refuses any other version unless `LOCK_ANY_PIP_TOOLS=1`.
+stopped). `lock.sh` refuses any other pip-tools *or* pip version (the pair
+24.2 + 7.4.1 is what was verified, and relocks byte-identically) unless
+`LOCK_ANY_PIP_TOOLS=1`.
 
 Then prove the lock, rather than assuming it:
 

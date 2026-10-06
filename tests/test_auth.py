@@ -379,6 +379,31 @@ def test_every_credential_decision_goes_through_compare_digest(gated, monkeypatc
     assert len(calls) == 2
 
 
+def test_the_gate_is_the_outermost_user_middleware(settings, cache_home, monkeypatch):
+    """Starlette's add_middleware inserts at index 0: the LAST one added is
+    outermost. The gate is outermost today only because it is the only user
+    middleware; anything added after it would wrap it and see the raw
+    Authorization header of every unauthenticated request (review-11 A-4)."""
+    monkeypatch.setattr("panekmodel2.server.app.get_settings", lambda: settings)
+    app = create_app(JobManager(runner_factory=FakeRunner), password=PASSWORD)
+    assert app.user_middleware[0].cls is auth.PasswordGateMiddleware
+
+
+@pytest.mark.parametrize("content_type", [None, "text/plain", "application/x-www-form-urlencoded"])
+def test_a_cross_site_shaped_run_request_is_rejected(gated, content_type):
+    """Basic credentials are ambient: a browser attaches them to cross-site
+    requests. What stops a hostile page queueing runs is that POST /api/runs
+    only accepts a JSON content type — the simple-request shapes a page can
+    send without a CORS preflight (no type, text/plain, form) are refused.
+    That is FastAPI's strictness, not the gate's, so it is pinned here."""
+    headers = {**basic(PASSWORD), "Origin": "https://evil.example"}
+    if content_type:
+        headers["Content-Type"] = content_type
+    body = '{"urls": ["https://youtu.be/aaaaaaaaaaa"], "settings": {"detect_people": false}}'
+    res = gated.post("/api/runs", content=body, headers=headers)
+    assert res.status_code == 422, res.text
+
+
 def test_the_middleware_refuses_to_arm_with_a_blank_password():
     """Constructing the gate with no secret is a programming error, loudly."""
     for blank in ("", None):
@@ -468,12 +493,25 @@ def flat(output: str) -> str:
 def test_the_cli_exits_nonzero_instead_of_binding_an_open_interface(monkeypatch):
     """The refusal reaches the operator as an exit code, not a traceback.
 
-    ``serve`` raises before uvicorn is called, so no socket is opened and no
-    server has to be torn down here.
+    ``serve`` raises before uvicorn is called. uvicorn.run is still stubbed to
+    FAIL: a guard test must never be able to perform what it guards. Unstubbed,
+    a regressed bind guard made this test genuinely serve an unauthenticated
+    app on *:8000 and hang (review-11 A-1), and the "kill" then depended on
+    whether port 8000 happened to be busy.
     """
+    import uvicorn
+
+    reached = []
+
+    def must_not_serve(app, **kwargs):
+        reached.append(kwargs)
+        pytest.fail("uvicorn.run reached: the bind guard did not refuse")
+
+    monkeypatch.setattr(uvicorn, "run", must_not_serve)
     monkeypatch.delenv(auth.PASSWORD_ENV, raising=False)
     result = run_cli(["ui", "--host", "0.0.0.0", "--no-open"])
 
+    assert reached == [], "uvicorn.run was called for an unauthenticated network bind"
     assert result.exit_code == 2
     assert auth.PASSWORD_ENV in flat(result.output)
     assert "Refused to start" in flat(result.output)

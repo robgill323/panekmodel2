@@ -92,8 +92,11 @@ def create_app(manager: JobManager | None = None, password=_FROM_ENV) -> FastAPI
     app = FastAPI(title="Throughline", version="2.0", docs_url="/api/docs", lifespan=lifespan)
     app.state.jobs = jobs
 
-    # Added first so it wraps the entire stack — the router, the static mount
-    # and the docs routes all sit underneath it.
+    # Wraps the router, the static mount and the docs routes. Starlette makes
+    # the LAST add_middleware call the outermost layer, so any middleware
+    # added after this one would sit OUTSIDE the gate and see unauthenticated
+    # requests, raw Authorization header included. Keep this the last call;
+    # test_the_gate_is_the_outermost_user_middleware pins it.
     if password:
         app.add_middleware(auth.PasswordGateMiddleware, password=password)
 

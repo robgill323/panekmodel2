@@ -41,18 +41,24 @@ COMPILE_FLAGS=(--generate-hashes --allow-unsafe --strip-extras --quiet)
 # torch wheels before it was stopped. 7.4.1 reads the hashes from the JSON API
 # and locks this project in about a minute. Override at your own risk.
 PIP_TOOLS_VERSION="7.4.1"
+# pip-tools drives pip's resolver and finder internals, so the PAIR is what was
+# verified, not pip-tools alone.
+PIP_VERSION="24.2"
 
 have_pip_tools() {
     "$1" -c 'import piptools' >/dev/null 2>&1
 }
 
 check_pip_tools_version() {
-    local found
-    found="$("$PYTHON" -c 'from importlib.metadata import version; print(version("pip-tools"))')"
-    if [ "$found" != "$PIP_TOOLS_VERSION" ] && [ -z "${LOCK_ANY_PIP_TOOLS:-}" ]; then
-        echo "pip-tools $found found; this script is verified with $PIP_TOOLS_VERSION." >&2
-        echo "  $PYTHON -m pip install 'pip==24.2' 'pip-tools==$PIP_TOOLS_VERSION'" >&2
-        echo "or set LOCK_ANY_PIP_TOOLS=1 to try $found anyway (see the note above)." >&2
+    local tools pip
+    tools="$("$PYTHON" -c 'from importlib.metadata import version; print(version("pip-tools"))')"
+    pip="$("$PYTHON" -c 'from importlib.metadata import version; print(version("pip"))')"
+    if { [ "$tools" != "$PIP_TOOLS_VERSION" ] || [ "$pip" != "$PIP_VERSION" ]; } \
+            && [ -z "${LOCK_ANY_PIP_TOOLS:-}" ]; then
+        echo "found pip-tools $tools with pip $pip; this script is verified with" >&2
+        echo "pip-tools $PIP_TOOLS_VERSION + pip $PIP_VERSION:" >&2
+        echo "  $PYTHON -m pip install 'pip==$PIP_VERSION' 'pip-tools==$PIP_TOOLS_VERSION'" >&2
+        echo "or set LOCK_ANY_PIP_TOOLS=1 to try them anyway (see the note above)." >&2
         exit 1
     fi
 }
@@ -62,7 +68,7 @@ lock_local() {
         echo "pip-tools is not installed for $PYTHON." >&2
         echo "Install it into a throwaway environment, not the project venv:" >&2
         echo "  python3.12 -m venv /tmp/lockenv" >&2
-        echo "  /tmp/lockenv/bin/pip install 'pip==24.2' 'pip-tools==$PIP_TOOLS_VERSION'" >&2
+        echo "  /tmp/lockenv/bin/pip install 'pip==$PIP_VERSION' 'pip-tools==$PIP_TOOLS_VERSION'" >&2
         echo "  PYTHON=/tmp/lockenv/bin/python ./scripts/lock.sh" >&2
         exit 1
     fi

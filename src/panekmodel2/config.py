@@ -59,6 +59,13 @@ class Settings(BaseSettings):
         env_prefix = ""
         env_file = ".env"
         env_file_encoding = "utf-8"
+        # The operator's .env also carries keys that are not Settings fields
+        # (THROUGHLINE_PASSWORD, the compose-only keys, retired GOOGLE_*), and
+        # on the native path it is the server's working directory. The
+        # default "forbid" made every settings read raise. Must be IGNORE,
+        # never "allow": allowed extras are stored on the model, and the model
+        # is serialized into /api/health, run results and CSV exports.
+        extra = "ignore"
 
 
 # Settings that used to do something and now do not. Silently ignoring an env
