@@ -1,11 +1,13 @@
 evidence_bundle:
   artifact: docs/DEPLOYMENT.md
   produced_by: developer
-  worktree_ref: feature/packaging-baseline-2@82859e0
-  # Branch note: the dead agent's worktree still has feature/packaging-baseline
-  # checked out (at ce23bb7), so git will not move that ref from here. This
-  # branch is ce23bb7 replayed onto main@087b444 (clean, as 0557ccf) plus the
-  # packaging commit 82859e0.
+  worktree_ref: feature/packaging-baseline-2@fcb4bfc
+  # History: 0557ccf (auth gate, ce23bb7 replayed onto main@087b444) ->
+  # 82859e0 (packaging) -> fcb4bfc (review-11 fix cycle, retry 1/2).
+  # feature/packaging-baseline (ce23bb7) is still checked out in the dead
+  # agent's worktree and was left untouched. Push to origin was denied by the
+  # permission system and not retried; the branch exists only in the local
+  # repository's shared object store.
   items:
     - id: E-1
       kind: test-run
@@ -13,14 +15,14 @@ evidence_bundle:
       expect: {exit: 0}
       cwd: "."
       # In the capturing worktree, .venv was built ONLY from
-      # requirements-dev.lock (see E-11). 548 passed, 8 slow deselected.
+      # requirements-dev.lock (see E-11). 558 passed, 8 slow deselected.
 
     - id: E-2
       kind: test-run
       cmd: '.venv/bin/python -m pytest tests/test_auth.py -p no:randomly'
       expect: {exit: 0}
       cwd: "."
-      # The gate, the bind refusal and their leak paths: 132 tests.
+      # The gate, the bind refusal and their leak paths: 136 tests.
 
     - id: E-3
       kind: test-run
@@ -31,6 +33,13 @@ evidence_bundle:
       # parser (skips if the docker CLI is absent), and the real-socket tests.
 
     - id: E-4
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests/test_settings_dotenv.py -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+      # B-1: Settings against the runbook's own .env (6 tests).
+
+    - id: E-5
       kind: file-exists
       paths:
         - Dockerfile
@@ -45,85 +54,118 @@ evidence_bundle:
         - src/panekmodel2/server/auth.py
         - tests/test_auth.py
         - tests/test_packaging.py
-
-    - id: E-5
-      kind: citation
-      ref: "src/panekmodel2/server/auth.py:149"
-      # PasswordGateMiddleware — raw ASGI above the router, so the "/" static
-      # mount, docs routes and future routes are gated by construction. The
-      # Basic-vs-session-cookie justification is in its docstring.
+        - tests/test_settings_dotenv.py
 
     - id: E-6
       kind: citation
-      ref: "src/panekmodel2/server/auth.py:117"
-      # require_auth_for_bind — the SEC-001 permanent fix: non-loopback bind
-      # with no (or blank) password raises BindRefused; CLI exits 2.
+      ref: "src/panekmodel2/server/auth.py:149"
+      # PasswordGateMiddleware — raw ASGI above the router; Basic-vs-cookie
+      # justification in its docstring.
 
     - id: E-7
       kind: citation
-      ref: "src/panekmodel2/server/app.py:186"
-      # serve() hands uvicorn the GATED app; pinned by the assertion at
-      # tests/test_auth.py:502 after mutation M09 survived the inherited suite.
+      ref: "src/panekmodel2/server/auth.py:117"
+      # require_auth_for_bind — SEC-001 permanent fix (refusal, not warning).
 
     - id: E-8
       kind: citation
-      ref: "tests/test_packaging.py:509"
-      # The CRITICAL from the brief: uvicorn at "trace", every logger captured,
-      # Basic/Bearer/wrong credentials presented over a real socket; neither
-      # the password nor its base64 may appear. Non-vacuous: requires the
-      # access line and a trace ASGI record to have been captured, and was
-      # separately shown to FAIL when auth.py logs the offered password.
+      ref: "src/panekmodel2/config.py:68"
+      # B-1: extra = "ignore" (NOT "allow"; see the comment above it and E-14).
 
     - id: E-9
       kind: citation
-      ref: "docker-compose.yml:26"
-      # ${THROUGHLINE_PASSWORD:?} — Compose refuses to start without it; pinned
-      # through `docker compose config` at tests/test_packaging.py:120.
+      ref: "tests/test_settings_dotenv.py:78"
+      # Pins ignore-not-allow: password absent from model_dump(), repr and
+      # model_extra; with :93, authenticated /api/health is 200 with the
+      # runbook .env in the working directory.
 
     - id: E-10
       kind: citation
-      ref: "scripts/lock.sh:43"
-      # pip-tools pinned to 7.4.1, with the reason (7.6.1 JSON-API URL bug).
+      ref: "tests/test_auth.py:506"
+      # A-1: uvicorn.run stubbed to pytest.fail in the bind-refusal CLI test.
 
     - id: E-11
-      kind: human-attested
-      claim: "The suite genuinely passes in a venv built purely from the lock. Executed on macOS/arm64, Python 3.12.0: `python3.12 -m venv .venv; .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock` (exit 0); `.venv/bin/python -m pip install --no-deps --no-build-isolation -e .` (exit 0 — no-build-isolation so the setuptools build backend also came from the lock); `pip check` reported no broken requirements; `pip freeze --all --exclude-editable` compared against the lock's pins differed ONLY by `pip` itself (venv bootstrap). Then `pytest -m 'not slow'`: 548 passed, 0 failed, 0 skipped, 8 deselected."
+      kind: citation
+      ref: "tests/test_auth.py:382"
+      # A-4: the gate is user_middleware[0] (outermost); app.py:101's comment
+      # now states Starlette's last-added-is-outermost rule correctly.
 
     - id: E-12
-      kind: human-attested
-      claim: "Mutation testing of the enforcement: 25 mutations across auth.py, app.py, logging_redaction.py, cli.py, config.py, docker/healthcheck.py, Dockerfile and docker-compose.yml, each applied alone, verified applied (file bytes changed and new text present), full fast suite run, restored from the in-memory original and verified byte-identical; `git status` identical before and after. First pass against the inherited tests: 23 killed, 2 survived — M09 (serve() passing password=None to create_app: a genuinely open server on 0.0.0.0 with the password set — NOT equivalent, a real gap) and M11 (any auth scheme accepted as a raw password: not a bypass since the password is still required, but a contract break). Tests were added for both; final pass 25/25 killed. M20 (removing the empty-credential guard), which I predicted equivalent, was killed — without it a bare `Bearer` header raises AttributeError (a 500, not a 401); my prediction was wrong. Script: scratchpad dev-packaging2/mutate_packaging.py (not committed)."
+      kind: citation
+      ref: "tests/test_auth.py:393"
+      # Cross-site-shaped POST /api/runs (no type / text/plain / form) -> 422
+      # even with Basic credentials attached.
 
     - id: E-13
-      kind: human-attested
-      claim: "pip-tools 7.6.1 (with pip 23.2.1 and with pip 26.2.1) computed the PyPI JSON-API URL as https://pypi.org/torch/json, which returns 404 (verified by calling PyPIRepository._get_project and session.get directly), so --generate-hashes fell back to downloading every candidate wheel to hash it; the pip-tools cache reached 22 GB of torch wheels before the run was killed. pip-tools 7.4.1 + pip 24.2 obtained all 24 torch 2.14.1 hashes from the JSON API and produced both locks in ~83 s. lock.sh refuses other pip-tools versions unless LOCK_ANY_PIP_TOOLS=1; that refusal was executed against 7.6.1 (exit 1)."
+      kind: citation
+      ref: "tests/test_packaging.py:509"
+      # Real-socket leak test: uvicorn at "trace"; the panekmodel2 and uvicorn
+      # loggers captured (NOT "every logger" — corrected per review A-6).
 
     - id: E-14
-      kind: human-attested
-      claim: "Docker Compose v2.34.0 (`docker compose config`, client-side; the daemon was NOT running and was not started) parsed docker-compose.yml alone and with docker-compose.gpu.yml: exit 1 with THROUGHLINE_PASSWORD unset or blank, exit 0 with a placeholder; resolved port host_ip 127.0.0.1; three named volumes at the expected targets; the GPU override only changes TORCH_INDEX_URL, CUDA and the device reservation. These checks are automated in tests/test_packaging.py (skipped where the docker CLI is absent)."
+      kind: citation
+      ref: "src/panekmodel2/server/app.py:189"
+      # serve() hands uvicorn the gated app; pinned at tests/test_auth.py:540.
 
     - id: E-15
-      kind: human-attested
-      claim: "Inherited state verified at the commits, not trusted: ce23bb7 contained exactly the seven files described; replayed onto main@087b444 with no conflict (as 0557ccf). The dead worktree held uncommitted Dockerfile/compose/healthcheck/test_packaging/RUNBOOK/lock work; it was read only (never written). Salvaged and adapted: healthcheck.py verbatim; Dockerfile, compose, .dockerignore, lock.sh, tests and runbook rewritten to the brief (requirements.lock naming, separate named volumes with seeded ownership, DEPLOYMENT.md). Its README diff was NOT applied wholesale — it predates story-3d and would have reverted the granularity table."
+      kind: citation
+      ref: "scripts/lock.sh:46"
+      # A-7: pip 24.2 enforced alongside pip-tools 7.4.1 (line 43).
 
     - id: E-16
+      kind: citation
+      ref: "docs/DEPLOYMENT.md:127"
+      # B-1 runbook fix: on the native path the password must be in the process
+      # environment; the server never reads it from .env.
+
+    - id: E-17
+      kind: human-attested
+      claim: "The suite genuinely passes in a venv built purely from the lock. macOS/arm64, Python 3.12.0: `python3.12 -m venv .venv; .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock` (exit 0); `.venv/bin/python -m pip install --no-deps --no-build-isolation -e .` (exit 0); `pip check` clean; `pip freeze --all --exclude-editable` vs the lock's pins differed only by `pip` (venv bootstrap). The reviewer independently rebuilt and matched this. At fcb4bfc: `pytest -m 'not slow'` -> 558 passed, 0 failed, 0 skipped, 8 deselected."
+
+    - id: E-18
+      kind: human-attested
+      claim: "B-1 was reproduced before the fix: with the runbook's .env in the working directory, tests/test_settings_dotenv.py failed with pydantic `extra_forbidden` for THROUGHLINE_PASSWORD, THROUGHLINE_BIND_ADDR, THROUGHLINE_PORT, TORCH_INDEX_URL, GPU_COUNT and the rest, then passed after `extra = \"ignore\"`. Mutations M26 (extra=\"allow\") and M27 (extra removed, back to forbid) are each killed by that file."
+
+    - id: E-19
+      kind: human-attested
+      claim: "Mutation run at the fix-cycle tree: 28 mutations (M01-M25 from the first cycle plus M26 allow, M27 forbid, M28 a middleware added outside the gate), each applied alone, verified applied, full fast suite, restored from the in-memory original and verified byte-identical; `git diff` and `git status` hashes identical before and after. 28/28 killed. First-cycle correction (review A-1 / A-6): M06 (bind guard removed) was recorded as killed in cycle 1, but that kill was environment-dependent — the unstubbed CLI test could really serve on *:8000, and the reviewer observed it listening for 11 minutes. With A-1's stub, M06 against that CLI test alone failed in 8.3 s on `uvicorn.run reached: the bind guard did not refuse`; port 8000 was free beforehand and nothing ever listened. Script: scratchpad dev-packaging2/mutate_packaging.py (uncommitted)."
+
+    - id: E-20
+      kind: human-attested
+      claim: "pip-tools 7.6.1 computes the PyPI JSON-API URL as https://pypi.org/<name>/json (404; reproduced by calling PyPIRepository._get_project directly), so --generate-hashes fell back to downloading every wheel to hash it (22 GB of torch before being killed). pip-tools 7.4.1 + pip 24.2 locks in about 80 s. lock.sh refused 7.6.1 + pip 26.2.1 (exit 1); a relock with 7.4.1 + 24.2 at fcb4bfc produced byte-identical requirements.lock and requirements-dev.lock."
+
+    - id: E-21
+      kind: human-attested
+      claim: "Docker Compose v2.34.0 `docker compose config` (client-side; the daemon was NOT running and was not started) refuses an unset or blank password, resolves the port to 127.0.0.1 and mounts the three named volumes; the GPU override changes only the torch index, CUDA and the device reservation. These checks are automated in tests/test_packaging.py and the reviewer confirmed they ran, not skipped."
+
+    - id: E-22
+      kind: human-attested
+      claim: "Deferred, per the coordinator, with reasons. A-3 (header redaction misses an ASGI scope-header tuple `(b'authorization', b'Basic …')` and only partly redacts Bearer credentials containing characters outside [A-Za-z0-9-._~+/=]): defence in depth only — nothing in the codebase logs headers or the scope, and uvicorn's trace logger replaces headers with `<...>`. A-5 (a non-ASCII password fails over Bearer, and the healthcheck's urllib raises on characters outside latin-1): generated passwords (secrets.token_urlsafe) are ASCII, and the runbook says to generate one. A-6 (the real-socket test does not lower the root logger, so a third-party DEBUG log of the password would pass it): that leak class is caught by the in-process test_no_auth_path_logs_the_password, whose fixture sets root to DEBUG, and the overclaim in runbook §11 and E-13 is corrected."
+
+    - id: E-23
+      kind: fixture-provenance
+      fixture: tests/test_settings_dotenv.py
+      synthetic: true
+      # The .env is the runbook's own §3 + Appendix B keys, with a canary
+      # password; nothing captured from a real deployment.
+
+    - id: E-24
       kind: fixture-provenance
       fixture: tests/test_packaging.py
       synthetic: true
-      # No captured data: text assertions over the repo's own files, Docker's
-      # parser over them, and a loopback uvicorn with the pipeline stubbed.
 
-    - id: E-17
+    - id: E-25
       kind: assumed
-      claim: "IMAGE CONTENTS ARE UNVERIFIED — verification needs a Docker daemon, which was down and was not started. Never executed: `docker build`, the non-root user at runtime, volume ownership seeding, NLTK/HF downloads landing in the model volume, the in-container healthcheck, and the build-arg torch install. The Dockerfile tests check its TEXT (no secret named in any instruction, COPY allowlist, USER before CMD, mount points created with ownership); they cannot prove a layer is secret-free. No image was built, so none was published."
+      claim: "IMAGE CONTENTS ARE UNVERIFIED — needs a Docker daemon (down, not started). Never executed: docker build, the non-root user at runtime, volume ownership seeding, downloads landing in the model volume, the in-container healthcheck. The Dockerfile tests check its TEXT only. Nothing was built, so nothing was published."
 
-    - id: E-18
+    - id: E-26
       kind: assumed
-      claim: "UNTESTED-PENDING-RIG: the GPU override, the CUDA torch index, `scripts/lock.sh --docker` (hence any reproducible/pinned image), every Linux and WSL2 step, Tailscale, the systemd sketch, the backup/restore commands and the Apptainer notes. All are reasoned from documentation and source reading (e.g. NLTK's default_download_dir, Docker's volume-seeding rule), not executed."
+      claim: "UNTESTED-PENDING-RIG: the GPU override and CUDA torch index; `scripts/lock.sh --docker` (hence any pinned image); every Linux and WSL2 step, including the systemd unit and the `set -a; . .env; set +a` export now documented for B-1 (B-1 itself is tested in-process, with the .env in the working directory and the password in the environment, not under a real systemd); Tailscale; backup/restore; Apptainer."
 
-    - id: E-19
+    - id: E-27
       kind: assumed
-      claim: "The committed locks are valid only for macOS/arm64 + Python 3.12. They will refuse (--require-hashes) on Linux; that refusal is reasoned from pip-tools' marker-based resolution (Linux-only nvidia-*/triton deps are absent), not executed on Linux. The default image therefore installs from pyproject floors and is not reproducible."
+      claim: "The committed locks are valid only for macOS/arm64 + Python 3.12; they will refuse --require-hashes on Linux (reasoned from marker-based resolution, not executed there). The default image installs from pyproject floors and is not reproducible."
 
-    - id: E-20
+    - id: E-28
       kind: assumed
-      claim: "The slow suite (8 tests, real model weights) was not run in the lock-built venv. The diff touches no pipeline/topic/sentiment code, but the lock does resolve newer library versions than the shared .venv (e.g. fastapi 0.142.2), so real-model behaviour under the locked versions is unverified."
+      claim: "The slow suite (8 tests, real model weights) was not run in the lock-built venv. The diff touches no pipeline code, but the lock resolves newer library versions than the shared .venv, so real-model behaviour under the locked versions is unverified."
