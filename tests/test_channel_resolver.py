@@ -256,6 +256,7 @@ def test_real_yt_dlp_with_these_options_refuses_a_non_youtube_url(capfd):
     """
     yt_dlp = pytest.importorskip("yt_dlp")
     with yt_dlp.YoutubeDL(ydl_options(1)) as real:
+        assert list(real._ies) == ["YoutubeTab"], "the allow-list loads exactly one extractor"
         with pytest.raises(yt_dlp.utils.DownloadError, match="No suitable extractor"):
             real.extract_info("file:///etc/passwd", download=False)
     assert "No suitable extractor" not in capfd.readouterr().err
@@ -420,6 +421,86 @@ def test_yt_dlp_errors_become_plain_language(text, kind):
     err = classify_error(RuntimeError(text))
     assert err.kind == kind
     assert "ERROR" not in err.message and "[youtube" not in err.message
+
+
+# B-1 (review-10): yt-dlp's error text starts with "[youtube:tab] <item id>:",
+# and for a handle URL the item id IS the handle. Every row above used a
+# neutral id, so a handle containing a keyword captured every failure on that
+# channel. These rows use the real prefix format with keyword-bearing ids and
+# assert the kind the MESSAGE implies, not the handle.
+@pytest.mark.parametrize("text,kind", [
+    ("ERROR: [youtube:tab] @privatelab/videos: Unable to download API page: ('Unable to connect "
+     "to proxy', NewConnectionError(\"HTTPSConnection(host='127.0.0.1', port=9): Failed to "
+     "establish a new connection: [Errno 61] Connection refused\"))", "unreachable"),
+    ("ERROR: [youtube:tab] @PrivateEquityTalks/videos: Unable to download webpage: <urlopen "
+     "error [Errno 8] nodename nor servname provided>", "unreachable"),
+    ("ERROR: [youtube:tab] @unavailableband/videos: Unable to download API page: HTTP Error 404: "
+     "Not Found (caused by <HTTPError 404: Not Found>)", "not_found"),
+    ("ERROR: [youtube:tab] @terminatedtv/videos: The read operation timed out", "unreachable"),
+    ("ERROR: [youtube:tab] @connectionsmusic/videos: something nobody anticipated", "failed"),
+    ("ERROR: [youtube:tab] @errnolab/videos: something nobody anticipated", "failed"),
+    ("ERROR: [youtube:tab] @privatelab/videos: This channel does not have a videos tab",
+     "private_or_empty"),
+    ("ERROR: [youtube:tab] UCprivate000000000000000: YouTube said: This channel does not exist.",
+     "not_found"),
+])
+def test_the_echoed_item_id_never_steers_the_classification(text, kind):
+    assert classify_error(RuntimeError(text)).kind == kind
+
+
+def test_the_channel_base_is_removed_wherever_the_error_echoes_it():
+    """A transport message can repeat the request path after the prefix."""
+    text = "ERROR: [youtube:tab] @privatelab/videos: Failed fetching /@privatelab/videos?x=1"
+    assert classify_error(RuntimeError(text)).kind == "private_or_empty"  # the trap
+    assert classify_error(RuntimeError(text), echoed="@privatelab").kind == "failed"
+
+
+def test_the_listing_passes_its_own_base_to_the_classifier(ydl):
+    ydl.error = RuntimeError(
+        "ERROR: [youtube:tab] c/privatelab/videos: Failed fetching /c/privatelab/videos"
+    )
+    with pytest.raises(ChannelError) as err:
+        list_channel_videos("https://www.youtube.com/c/privatelab", 5)
+    assert err.value.kind == "failed"
+
+
+def test_a_transport_failure_is_unreachable_whatever_the_text_says():
+    """The structured cause outranks every substring."""
+    from yt_dlp.networking.exceptions import ProxyError
+    from yt_dlp.utils import DownloadError, ExtractorError
+
+    cause = ProxyError("Unable to connect to proxy")
+    direct = DownloadError("ERROR: [youtube:tab] @x/videos: This channel is private",
+                           exc_info=(ProxyError, cause, None))
+    assert classify_error(direct).kind == "unreachable"
+    wrapped = DownloadError("ERROR: [youtube:tab] @x/videos: This channel is private",
+                            exc_info=(ExtractorError, ExtractorError("x", cause=cause), None))
+    assert classify_error(wrapped).kind == "unreachable"
+
+
+def test_a_non_transport_cause_leaves_the_text_in_charge():
+    from yt_dlp.utils import DownloadError
+
+    err = DownloadError("ERROR: [youtube:tab] UCx: YouTube said: This channel does not exist.",
+                        exc_info=(ValueError, ValueError("x"), None))
+    assert classify_error(err).kind == "not_found"
+
+
+@pytest.mark.parametrize("handle", ["@plainlab", "@PrivateEquityTalks", "@unavailableband", "@terminatedtv"])
+def test_real_yt_dlp_network_failure_is_unreachable_offline(monkeypatch, handle):
+    """The reviewer's reproduction, kept: real yt-dlp, real error, no network.
+
+    The proxy is a closed local port, so the connection is refused on this
+    machine and nothing leaves it. This replaces "needs a live capture" for
+    the network-failure kind.
+    """
+    yt_dlp = pytest.importorskip("yt_dlp")
+    real_options = cr.ydl_options
+    monkeypatch.setattr(cr, "_yt_dlp", yt_dlp)
+    monkeypatch.setattr(cr, "ydl_options", lambda n: dict(real_options(n), proxy="http://127.0.0.1:9"))
+    with pytest.raises(ChannelError) as err:
+        list_channel_videos(handle, 1)
+    assert err.value.kind == "unreachable"
 
 
 def test_every_kind_has_a_status_and_a_sentence():

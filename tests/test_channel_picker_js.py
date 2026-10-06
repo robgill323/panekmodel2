@@ -248,7 +248,8 @@ def test_fetch_results_render_without_stealing_focus():
     checked once in headless Chrome, which this suite cannot repeat."""
     assert "renderKeepingFocus('#pick-status')" in js_function_body(app(), "fetchChannel")
     body = js_function_body(app(), "renderKeepingFocus")
-    assert "document.getElementById(id)" in body
+    # Exact text, so a guard like `id && false && …` cannot slip in (review Ms3).
+    assert "const back = id && document.getElementById(id);" in body
     assert "back.focus()" in body
     assert body.index("render()") < body.index("back.focus()")
 
@@ -274,6 +275,23 @@ def test_the_screen_renders_the_picker_and_the_panel_is_chosen_by_the_decision()
     assert "pickerPanelState(" in js_function_body(app(), "channelPanel")
 
 
+def test_the_empty_state_offers_a_retry_too():
+    """"Nothing to list" comes from a heuristic over error text, so it can be
+    wrong; the researcher must be able to ask again (review A-5)."""
+    body = js_function_body(app(), "channelPanel")
+    empty = body[body.index("panel === 'empty'"):body.index("const n = ")]
+    assert 'data-action="channel-fetch"' in empty
+    assert body.count('data-action="channel-fetch"') == 2
+
+
+def test_the_privacy_hint_tells_the_truth():
+    """The channel listing and thumbnails also reach YouTube now (review A-3)."""
+    body = js_function_body(app(), "screenRun")
+    assert "Nothing leaves this machine except the transcript fetch" not in body
+    assert "Transcripts, channel listings and thumbnails come from YouTube" in body
+    assert "Your results stay on this machine" in body
+
+
 def test_add_goes_through_selected_urls_and_the_existing_parser():
     body = js_function_body(app(), "addSelectedToRun")
     assert "selectedUrls(" in body
@@ -284,7 +302,9 @@ def test_add_goes_through_selected_urls_and_the_existing_parser():
 def test_checkbox_changes_update_selection_without_a_rerender():
     """A full render() replaces the screen and drops keyboard focus mid-list."""
     body = js_function_body(app(), "onPickToggle")
-    assert "setSelected(" in body
+    # The exact call: with `true` in place of box.checked, unticking a box
+    # would ADD the video and the Add button would include it (review A-1).
+    assert "setSelected(S.channel.selected, box.dataset.pick, box.checked)" in body
     assert "syncPickerControls()" in body
     assert "render()" not in body
 

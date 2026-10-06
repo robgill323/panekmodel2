@@ -30,6 +30,11 @@ try:
 except Exception:  # noqa: BLE001
     _yt_dlp = None
 
+try:
+    from yt_dlp.networking.exceptions import TransportError as _TransportError  # type: ignore
+except Exception:  # noqa: BLE001
+    _TransportError = None
+
 from .pipeline import extract_video_id
 
 logger = logging.getLogger(__name__)
@@ -207,11 +212,49 @@ class _QuietLogger:
         logger.debug("yt-dlp: %s", msg)
 
 
-def classify_error(exc: BaseException) -> ChannelError:
-    """Map a yt-dlp failure onto one of the plain-language kinds."""
+# yt-dlp prefixes every error with "[extractor] <item id>:", and for a handle
+# URL the item id is the user's handle. Handles and UC IDs contain neither
+# whitespace nor ":", so this strips exactly the echoed id.
+_ECHO_PREFIX = re.compile(r"^(?:error:\s*)?\[[^\]]*\]\s*[^\s:]+:\s*")
+
+
+def _is_transport_failure(exc: BaseException) -> bool:
+    """True when the failure chain holds a yt-dlp network-layer error."""
+    if _TransportError is None:
+        return False
+    stack: list = [exc]
+    seen: set = set()
+    while stack and len(seen) < 16:
+        err = stack.pop()
+        if not isinstance(err, BaseException) or id(err) in seen:
+            continue
+        seen.add(id(err))
+        if isinstance(err, _TransportError):
+            return True
+        info = getattr(err, "exc_info", None)
+        if isinstance(info, tuple) and len(info) > 1:
+            stack.append(info[1])
+        stack.extend((getattr(err, "cause", None), err.__cause__, err.__context__))
+    return False
+
+
+def classify_error(exc: BaseException, echoed: str = "") -> ChannelError:
+    """Map a yt-dlp failure onto one of the plain-language kinds.
+
+    The keyword match below runs over error TEXT, which echoes user input: the
+    channel's handle leads every message, and a transport message can repeat
+    the request path. A channel called @PrivateEquityTalks must not turn a dead
+    network into "no public videos", so the structured cause is consulted
+    first, and the echoed id — plus ``echoed``, the channel's own base — is
+    removed before any keyword is looked for.
+    """
     if isinstance(exc, ChannelError):
         return exc
-    low = str(exc).lower()
+    if _is_transport_failure(exc):
+        return ChannelError("unreachable")
+    low = _ECHO_PREFIX.sub("", str(exc).lower())
+    if echoed:
+        low = low.replace(echoed.lower(), " ")
     if "http error 404" in low or "does not exist" in low:
         return ChannelError("not_found")
     if any(s in low for s in (
@@ -238,6 +281,11 @@ def _extract(url: str, count: int):
     return info, entries
 
 
+def _channel_base(url: str) -> str:
+    """"@handle", "c/name", … out of a URL normalize_channel_url built."""
+    return url.removeprefix("https://www.youtube.com/").removesuffix("/videos")
+
+
 def _extract_with_timeout(url: str, count: int, timeout: float):
     box: dict = {}
 
@@ -257,7 +305,7 @@ def _extract_with_timeout(url: str, count: int, timeout: float):
         raise ChannelError("timeout")
     if "error" in box:
         logger.info("Channel listing for %s failed: %s", url, box["error"])
-        raise classify_error(box["error"])
+        raise classify_error(box["error"], echoed=_channel_base(url))
     return box["result"]
 
 

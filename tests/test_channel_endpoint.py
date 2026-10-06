@@ -110,6 +110,17 @@ def test_yt_dlp_failures_are_plain_json_errors(client, message, status, kind):
     assert "ERROR" not in body["detail"]
 
 
+def test_a_keyword_handle_on_a_dead_network_is_502_not_empty(client, monkeypatch):
+    """B-1, end to end as the reviewer ran it: real yt-dlp, closed local proxy."""
+    yt_dlp = pytest.importorskip("yt_dlp")
+    real_options = cr.ydl_options
+    monkeypatch.setattr(cr, "_yt_dlp", yt_dlp)
+    monkeypatch.setattr(cr, "ydl_options", lambda n: dict(real_options(n), proxy="http://127.0.0.1:9"))
+    res = get(client, "@PrivateEquityTalks", 5)
+    assert res.status_code == 502
+    assert res.json()["kind"] == "unreachable"
+
+
 def test_an_empty_channel_is_the_private_or_empty_kind(client):
     FakeYDL.info = {"channel": "Empty", "entries": []}
     res = get(client, "@Empty", 5)

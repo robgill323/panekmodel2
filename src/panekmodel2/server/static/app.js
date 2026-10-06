@@ -493,7 +493,7 @@ function screenRun() {
         </div>
         <button type="button" class="btn-primary btn-block" data-action="start-run" ${urls.length && !S.starting ? '' : 'disabled'}>
           ${S.starting ? 'Starting…' : 'Run analysis'}</button>
-        <div class="hint" style="margin-top:10px;text-align:center">Nothing leaves this machine except the transcript fetch.</div>
+        <div class="hint" style="margin-top:10px;text-align:center">Transcripts, channel listings and thumbnails come from YouTube. Your results stay on this machine.</div>
         ${S.runError ? `<div class="banner error" style="margin-top:14px">${esc(S.runError)}</div>` : ''}
       </div>
       ${hasResults() ? '' : `<div class="dashed-card">
@@ -636,6 +636,7 @@ function channelPanel() {
       <div class="kicker">NOTHING TO LIST</div>
       <div class="pick-empty-title">No public videos at that address.</div>
       <div class="hint">${esc(ch.error || 'YouTube answered, but the channel’s video tab is empty.')}</div>
+      <div style="margin-top:12px"><button type="button" class="btn" data-action="channel-fetch">Try again</button></div>
     </div></div>`;
   }
 
