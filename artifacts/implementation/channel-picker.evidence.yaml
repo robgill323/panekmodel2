@@ -1,0 +1,160 @@
+evidence_bundle:
+  artifact: src/panekmodel2/channel_resolver.py
+  produced_by: developer
+  worktree_ref: feature/channel-picker@724ef4b
+  # STORY-5, channel ingestion with a selectable picker. Code commits:
+  #   1718f1e  feature (resolver, route, picker.js, app.js/styles/index, tests, README)
+  #   cf3beda  six tests added after mutation run 1 found six unpinned behaviours
+  #   1ca6385  review-10 B-1 fix (echoed handle steered classify_error) + A-1/A-3/A-5/N-3
+  #   724ef4b  two tests added after mutation run 3 found two unpinned classifier details
+  items:
+    # ── replayable ──────────────────────────────────────────────────
+    - id: E-1
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests -m "not slow"'
+      expect: {exit: 0}
+      cwd: "."
+      # 577 passed at 724ef4b = 332 at the 087b444 baseline + 245 new. The new
+      # count is NOT a breadth measure: the 245 collected items are 96 distinct
+      # test functions, and 168 of the items are rows of just 19 parametrized
+      # tables (URL forms, clamp values, durations, error texts). 19 of the 96
+      # are source-text assertions on app.js/index.html/styles.css, not behaviour.
+
+    - id: E-2
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests -m slow -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+      # 8 passed. Untouched by this story; run to show nothing regressed.
+
+    - id: E-3
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests/test_channel_resolver.py tests/test_channel_endpoint.py -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+      # Resolver + endpoint with yt_dlp replaced by a recording fake: URL forms,
+      # refusal table, count cap, flat-only options, strict-ID emission, error
+      # kinds, timeout. PLUS, with REAL yt-dlp and no network: the allow-list
+      # loads exactly YoutubeTab; file:// is refused; and B-1's reproduction -
+      # a closed local proxy (http://127.0.0.1:9) makes real yt-dlp raise its
+      # real network error for @plainlab, @PrivateEquityTalks, @unavailableband
+      # and @terminatedtv, all of which must classify as unreachable (and 502
+      # through the endpoint).
+
+    - id: E-4
+      kind: test-run
+      cmd: '.venv/bin/python -m pytest tests/test_channel_picker_js.py -p no:randomly'
+      expect: {exit: 0}
+      cwd: "."
+      # picker.js decisions executed in node (52 tests) + call-site source
+      # assertions scoped with js_function_body (19). Without node on PATH:
+      # 19 passed / 52 skipped - checked with PATH=/usr/bin:/bin at 724ef4b.
+
+    - id: E-5
+      kind: file-exists
+      paths:
+        - src/panekmodel2/channel_resolver.py
+        - src/panekmodel2/server/static/picker.js
+        - tests/test_channel_resolver.py
+        - tests/test_channel_endpoint.py
+        - tests/test_channel_picker_js.py
+
+    - id: E-6
+      kind: citation
+      ref: "src/panekmodel2/channel_resolver.py:99"
+      # normalize_channel_url - parses to one of four forms and REBUILDS the
+      # /videos URL; the raw input never reaches yt-dlp.
+
+    - id: E-7
+      kind: citation
+      ref: "src/panekmodel2/channel_resolver.py:137"
+      # is_strict_video_id - the pipeline's rule as a full match. Needed because
+      # extract_video_id's re.match("^...$") accepts "abcdefghijk\n".
+
+    - id: E-8
+      kind: citation
+      ref: "src/panekmodel2/channel_resolver.py:186"
+      # ydl_options - extract_flat, playlistend, skip_download,
+      # allowed_extractors=["youtube:tab"], socket_timeout, quiet logger.
+
+    - id: E-9
+      kind: citation
+      ref: "src/panekmodel2/server/static/picker.js:87"
+      # thumbIsBroken - error OR a <=120px-wide load. i.ytimg.com answers a
+      # missing mqdefault with HTTP 404 plus a valid 120x90 JPEG (measured with
+      # curl: 404 image/jpeg 120x90 vs 200 320x180), and headless Chrome
+      # rendered that placeholder (naturalWidth 120, complete) without `error`.
+
+    - id: E-10
+      kind: citation
+      ref: "src/panekmodel2/server/static/app.js:728"
+      # onPickToggle - setSelected(S.channel.selected, box.dataset.pick,
+      # box.checked), then syncPickerControls(); never render().
+
+    - id: E-23
+      kind: citation
+      ref: "src/panekmodel2/channel_resolver.py:241"
+      # classify_error (B-1 fix). Order: (1) a yt-dlp TransportError anywhere
+      # in the chain (exc_info[1], .cause, __cause__, __context__ - walked by
+      # _is_transport_failure at :221) is unreachable before any text is read;
+      # (2) the echoed "[extractor] <id>:" prefix is stripped (_ECHO_PREFIX at
+      # :218; handles and UC IDs contain no whitespace or ":", so the strip is
+      # exact); (3) the channel's own base ("@handle", "c/name", ...) is removed
+      # wherever the text repeats it; only then are keywords matched.
+
+    - id: E-11
+      kind: fixture-provenance
+      fixture: tests/test_channel_resolver.py
+      captured_from: "Live yt-dlp 2026.08.19 on 2026-10-06: flat extraction of https://www.youtube.com/@NASA/videos (entry shape), two missing channels (DownloadError texts used verbatim), a real ProxyError DownloadError produced offline via proxy http://127.0.0.1:9 (text used verbatim in the keyword-handle table), and real ExtractorError str() formatting"
+      # Video IDs, titles and counts in the fake payloads are synthetic, as are
+      # the keyword-bearing handles. The terminated / no-videos-tab / private
+      # wordings were written by hand to resemble yt-dlp output - see E-17.
+
+    - id: E-12
+      kind: fixture-provenance
+      fixture: tests/test_channel_picker_js.py
+      synthetic: true
+      # Hand-built video lists and states. The 120 and 320 thumbnail widths in
+      # the fallback table are the measured values from E-9, not guesses.
+
+    # ── attested: real runs, not replayable by this gate ───────────
+    - id: E-13
+      kind: human-attested
+      claim: "Mutation testing, three runs, every diff confirmed applied (old string must match exactly once, git diff --numstat non-empty, restored by git checkout, tree asserted clean). FINAL ACCOUNTING, 72 mutants at 1ca6385 plus two reruns at 724ef4b, all 72 killed, each by the test aimed at it. Split by WHAT killed them: 55 by behaviour tests (37 original resolver/route mutants plus 8 new classifier mutants, run through Python with yt-dlp faked or real; 10 picker.js mutants executed in node) and 17 by source-text assertions (13 app.js/index.html call-site mutants plus 4 for this cycle: Ms4 box.checked, Ms3 focus lookup, A-5 retry button, A-3 hint). The 17 text kills prove a specific spelling is present, not that the DOM behaves. Most of the original 13 were deletions, which a text check catches trivially. The reviewer showed that text-PRESERVING changes at call sites survive such checks. Of their four, Ms3 and Ms4 are now pinned by exact-call text; Ms1 and Ms2 (seq guard) were ruled equivalent under current reachability (L-6) and left. HISTORY: run 1 at 1718f1e - 60 applied, 54 killed, 6 survived, none equivalent (incl. urlsplit deleting tab/CR/LF so '@NA\\nSA' was accepted as @NASA), all pinned in cf3beda. Run 2 at 82f3d4b (tree = cf3beda): 60/60. Two run-1/2 mutants (M20, M21) were initially malformed (deleted from 'if' not the indentation, nesting the rest of the function), caught by their +1/-3 diff shape, corrected and re-killed by the intended test. Run 3 at 1ca6385 - 72 applied, 70 killed; B7 (_channel_base keeping /videos) and B8 (prefix pattern requiring 'ERROR:') survived, neither equivalent, both pinned in 724ef4b and rerun: killed."
+
+    - id: E-14
+      kind: human-attested
+      claim: "Driven in a real browser, twice - most recently at 724ef4b. Headless Google Chrome on macOS over the DevTools protocol, against the live server and live YouTube: 32 of 32 checks passed. Enter submits without a reload; count=12 gives 12 cards; real thumbnails load at 320px; durations show; focus moves to the status line after a fetch; Space toggles a checkbox and focus stays on it; Tab order is checkbox, Open link, next checkbox; Select all/none keep focus; Add appends after the researcher's lines without rewriting them, skips one already present and the run summary counts the merged corpus; the missing-thumbnail tile appears for a real i.ytimg 404; invalid-URL, not-found and empty-URL errors render; the empty state renders WITH a Try again button that re-fetches successfully (A-5); the privacy hint reads 'Transcripts, channel listings and thumbnails come from YouTube. Your results stay on this machine.' (A-3); no horizontal scroll at 760px. Screenshots of each state, light and dark, were reviewed by eye at 1718f1e. The driver is a one-off scratchpad script, NOT part of the suite."
+
+    - id: E-15
+      kind: human-attested
+      claim: "All four URL forms resolved live through list_channel_videos on 2026-10-06 (@NASA, /channel/UCLA_DiR1FfKNvjuUpBHmylQ/videos, youtube.com/c/NASA, m.youtube.com/user/NASAtelevision?si=x), each rebuilt canonically, same three uploads with durations. A missing handle and a missing UC ID came back not_found. After the B-1 fix, the reviewer's exact reproduction (HTTPS_PROXY=http://127.0.0.1:9, real app via TestClient) gives 502 unreachable for @plainlab, @PrivateEquityTalks, @unavailableband, @terminatedtv and @connectionsmusic - before the fix the middle two were 404 private_or_empty."
+
+    # ── honest limits, by the verification method each lacks ───────
+    - id: E-16
+      kind: assumed
+      claim: "Rendered appearance and thumbnail fallback in browsers OTHER than Chrome. Needs a browser of each kind; only headless Chrome on macOS was used. Safari and Firefox may fire `error` on the i.ytimg 404 placeholder, or may render it; both paths are handled, but only the `load` path has been observed."
+
+    - id: E-17
+      kind: assumed
+      claim: "Error classification against yt-dlp's REAL wording for terminated channels, channels with no videos tab, and private listings. Needs a live capture of a channel in each state; none was at hand. The NETWORK-failure kind no longer belongs here: a closed local proxy makes real yt-dlp produce its real network error offline and deterministically, and that is now a replayed test (E-3). Consequences of a mismatch, stated fully: a reworded message falls through to the generic 'failed' kind; and a message whose BODY happens to contain an English keyword ('private', 'unavailable', 'connection', ...) could still land in a wrong SPECIFIC kind. The handle-echo route to that (B-1) is closed, because the echoed id and the channel's own base are removed first. Residual: for /c/ and /user/ URLs a message that repeats only the bare name (without the c/ or user/ prefix) is not stripped. The empty state now has Try again, so a wrong 'no public videos' is recoverable in one click."
+
+    - id: E-18
+      kind: assumed
+      claim: "Upstream drift in YouTube or yt-dlp. Needs a scheduled live check; the suite is offline by design. The flat-entry shape was confirmed live once (E-11, E-15). If YouTube changes the tab payload, the mocked tests stay green while the feature breaks."
+
+    - id: E-19
+      kind: assumed
+      claim: "Screen-reader announcements. Needs an actual screen reader (VoiceOver/NVDA). Focus movement was verified in Chrome (E-14); whether the role=status / aria-live regions are actually announced was not tested."
+
+    - id: E-20
+      kind: assumed
+      claim: "Upload dates. Flat mode returns timestamp null for channel tabs (seen live), so the picker shows no dates and relies on the tab's newest-first order. This is the accepted limit from the brief, not a defect."
+
+    - id: E-21
+      kind: assumed
+      claim: "How long an abandoned fetch keeps running, and how many can pile up. Needs a slow-network test that was not run. After the 30 s overall timeout the daemon worker is left to finish, bounded per request by the 15 s socket timeout - roughly a minute worst case at count=100. It cannot block exit (pinned). There is no cap on concurrent listings (review A-4, low: reachable cross-origin via simple GET; routed to the story-4 auth probe list, not addressed here)."
+
+    - id: E-22
+      kind: assumed
+      claim: "Non-ASCII handles and legacy youtube.com/NAME vanity URLs. Needs a design decision, not a test. Both are refused with the 'invalid' message by choice: handles are matched as ASCII [A-Za-z0-9._-], and the brief named exactly four forms. YouTube allows non-Latin handles, so those channels must be entered by their /channel/UC... link."

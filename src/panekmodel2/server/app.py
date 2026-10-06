@@ -14,10 +14,11 @@ from pathlib import Path
 from typing import List, Literal, Optional
 
 from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .. import channel_resolver
 from ..chunker import words_for_seconds
 from ..config import Settings, get_settings
 from . import auth, exports
@@ -120,6 +121,20 @@ def create_app(manager: JobManager | None = None, password=_FROM_ENV) -> FastAPI
         except JobError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"job_id": job.id, "status": job.status, "n_urls": len(job.urls)}
+
+    @app.get("/api/channel/videos")
+    def channel_videos(url: str, count: int = channel_resolver.DEFAULT_COUNT):
+        """A channel's newest uploads for the New Run picker. Metadata only.
+
+        Failures carry ``kind`` beside the usual ``detail`` so the picker can
+        show "nothing to list" as an empty state rather than as an error.
+        """
+        try:
+            return channel_resolver.list_channel_videos(url, count)
+        except channel_resolver.ChannelError as exc:
+            return JSONResponse(
+                status_code=exc.status, content={"detail": exc.message, "kind": exc.kind}
+            )
 
     @app.get("/api/runs/{job_id}")
     def run_progress(job_id: str) -> dict:

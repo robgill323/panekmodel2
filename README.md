@@ -53,6 +53,14 @@ when it stops. Export before quitting. Runs are executed one at a time — the
 topic model is shared, so overlapping runs would corrupt each other's results;
 a queued run says so on the progress screen.
 
+To pull videos from a channel, use **From a channel** on the New Run screen:
+paste an `@handle`, `/channel/UC…`, `/c/…` or `/user/…` link, choose how many
+of the newest uploads to list (25 by default, at most 100), tick the ones you
+want and add them to the URL list, where they stay editable before the run.
+Listing reads titles and lengths only, through yt-dlp's flat mode — nothing is
+downloaded and no API key is needed. Flat mode does not report upload dates, so
+the list shows the channel's own newest-first order without them.
+
 ### Command line
 
 Run the full pipeline on a YouTube URL or ID:
