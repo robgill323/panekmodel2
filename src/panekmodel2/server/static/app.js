@@ -39,6 +39,11 @@ const S = {
   outlierVideo: 'all',
   // Auto-follow is on until the reader scrolls the transcript themselves.
   followTranscript: true,
+  // The New Run screen's channel picker. Decisions live in picker.js.
+  channel: {
+    url: '', count: PICKER_DEFAULT_COUNT, status: 'idle', kind: '', error: '',
+    name: '', videos: [], selected: [], skipped: 0, note: '',
+  },
 };
 
 const CHUNK_OPTS = [15, 30, 60, 120];
@@ -150,7 +155,10 @@ async function api(path, options) {
   try { body = text ? JSON.parse(text) : null; } catch (_) { body = text; }
   if (!res.ok) {
     const detail = body && body.detail ? body.detail : res.statusText;
-    throw new Error(detail);
+    const err = new Error(detail);
+    // The channel endpoint says which failure it was, beside the prose.
+    err.kind = body && typeof body === 'object' && body.kind ? body.kind : '';
+    throw err;
   }
   return body;
 }
@@ -463,6 +471,8 @@ function screenRun() {
         </div>
       </div>
 
+      ${channelCard()}
+
       <div class="card">
         <button type="button" class="adv-toggle" data-action="toggle-adv">
           <span style="display:flex;flex-direction:column;gap:3px">
@@ -566,6 +576,199 @@ function parseUrls(raw) {
 }
 function countRawLines(raw) {
   return String(raw || '').split(/[\n,]/).map((l) => l.trim()).filter(Boolean).length;
+}
+
+// ── new run: channel picker ─────────────────────────────────────────
+/* Lists a channel's newest uploads so the researcher can tick the ones to
+   analyze; "Add" appends their watch URLs to the textarea, where the usual
+   parsing and de-duplication apply and the corpus stays editable.
+
+   Ticking a box, Select all and Select none update the DOM in place through
+   syncPickerControls() and never call render(): render() replaces the whole
+   screen, which would throw keyboard focus out of the list mid-selection. */
+function channelCard() {
+  const ch = S.channel;
+  const loading = ch.status === 'loading';
+  return `<section class="url-box channel-box" aria-labelledby="channel-label">
+    <div class="url-box-head">
+      <span class="label" id="channel-label">FROM A CHANNEL</span>
+      <span class="mono-note">newest uploads first · metadata only</span>
+    </div>
+    <form class="channel-form" data-form="channel" novalidate>
+      <label class="sr-only" for="channel-url">Channel URL</label>
+      <input id="channel-url" class="channel-url" type="text" inputmode="url" autocomplete="off"
+        spellcheck="false" placeholder="https://www.youtube.com/@handle" value="${esc(ch.url)}"
+        aria-describedby="channel-hint">
+      <label class="channel-count" for="channel-count"><span>Latest</span>
+        <input id="channel-count" type="number" min="1" max="${PICKER_MAX_COUNT}" step="1"
+          value="${esc(ch.count)}"><span>videos</span></label>
+      <button type="submit" class="btn-primary channel-fetch" ${loading ? 'disabled' : ''}>${loading ? 'Fetching…' : 'Fetch'}</button>
+    </form>
+    <div class="hint channel-hint" id="channel-hint">@handle, /channel/UC…, /c/ and /user/ links all work, up to
+      ${PICKER_MAX_COUNT} videos. Lists titles and lengths only — nothing is downloaded. Thumbnails load from YouTube.</div>
+    ${channelPanel()}
+  </section>`;
+}
+
+function channelPanel() {
+  const ch = S.channel;
+  const panel = pickerPanelState(ch);
+  if (panel === 'idle') return '';
+
+  if (panel === 'loading') {
+    const ghosts = Array.from({ length: Math.min(ch.count, 8) }, () => `<div class="pick-card ghost">
+      <span class="pick-thumb"></span><span class="ghost-line"></span><span class="ghost-line short"></span></div>`).join('');
+    return `<div class="pick-panel" aria-busy="true">
+      <div class="pick-bar"><span class="pick-status" role="status">Listing the newest ${ch.count} uploads…</span></div>
+      <div class="pick-grid" aria-hidden="true">${ghosts}</div>
+    </div>`;
+  }
+
+  if (panel === 'error') {
+    return `<div class="pick-panel"><div class="banner error" role="alert" tabindex="-1" id="pick-status">
+      <strong>Couldn't list that channel.</strong> ${esc(ch.error)}
+      <div style="margin-top:10px"><button type="button" class="btn" data-action="channel-fetch">Try again</button></div>
+    </div></div>`;
+  }
+
+  if (panel === 'empty') {
+    return `<div class="pick-panel"><div class="pick-empty" role="status" tabindex="-1" id="pick-status">
+      <div class="kicker">NOTHING TO LIST</div>
+      <div class="pick-empty-title">No public videos at that address.</div>
+      <div class="hint">${esc(ch.error || 'YouTube answered, but the channel’s video tab is empty.')}</div>
+    </div></div>`;
+  }
+
+  const n = ch.selected.length;
+  const k = ch.skipped;
+  return `<div class="pick-panel">
+    <div class="pick-bar">
+      <span class="pick-status" id="pick-status" tabindex="-1"><strong>${ch.videos.length} video${ch.videos.length === 1 ? '' : 's'}</strong>${ch.name ? ' · ' + esc(ch.name) : ''}
+        · <span id="pick-count" aria-live="polite">${n} selected</span></span>
+      <span class="pick-tools">
+        <button type="button" class="btn" data-action="pick-all">Select all</button>
+        <button type="button" class="btn" data-action="pick-none">Select none</button>
+      </span>
+    </div>
+    ${k ? `<div class="hint pick-skipped">Left out ${k} listing entr${k === 1 ? 'y that wasn’t a standard video' : 'ies that weren’t standard videos'}.</div>` : ''}
+    <div class="pick-grid" role="group" aria-label="Videos from this channel, newest first">${ch.videos.map(pickCard).join('')}</div>
+    <div class="pick-foot">
+      <button type="button" class="btn-primary" id="pick-add" data-action="pick-add" ${n ? '' : 'disabled'}>${esc(addLabel(n))}</button>
+      <span class="hint" id="pick-note" role="status" tabindex="-1">${esc(ch.note)}</span>
+    </div>
+  </div>`;
+}
+
+function pickCard(v) {
+  const on = S.channel.selected.includes(v.id);
+  const box = 'pick-' + v.id;
+  const name = v.title || v.id;
+  const dur = v.duration_seconds == null ? '' : `<span class="pick-dur">${esc(fmtT(v.duration_seconds))}</span>`;
+  return `<div class="pick-card${on ? ' on' : ''}">
+    <label class="pick-main" for="${esc(box)}">
+      <span class="pick-thumb"><img src="${esc(v.thumbnail_url)}" alt="" loading="lazy"
+        referrerpolicy="no-referrer" width="320" height="180">${dur}</span>
+      <span class="pick-title">${v.title ? esc(v.title) : `<span class="mono-note">${esc(v.id)}</span>`}</span>
+    </label>
+    <div class="pick-row">
+      <input type="checkbox" class="pick-check" id="${esc(box)}" data-pick="${esc(v.id)}" ${on ? 'checked' : ''}>
+      <span class="mono-note pick-id">${esc(v.id)}</span>
+      <a class="pick-link" href="${esc(v.url)}" target="_blank" rel="noopener noreferrer"
+        aria-label="Open ${esc(name)} on YouTube in a new tab">Open ↗</a>
+    </div>
+  </div>`;
+}
+
+/* Re-render, then put focus back where it was — or, if the render took it,
+   on `fallback`. A fetch finishing while the researcher types in the URL
+   textarea must not throw them out of it. */
+function renderKeepingFocus(fallback) {
+  const active = document.activeElement;
+  const id = active && active !== document.body ? active.id : '';
+  const caret = active && typeof active.selectionStart === 'number' ? active.selectionStart : null;
+  render();
+  const back = id && document.getElementById(id);
+  if (back) {
+    back.focus();
+    if (caret !== null && typeof back.setSelectionRange === 'function') {
+      try { back.setSelectionRange(caret, caret); } catch (_) { /* not a text field */ }
+    }
+    return;
+  }
+  const target = fallback && $(fallback);
+  if (target) target.focus();
+}
+
+let channelSeq = 0;
+async function fetchChannel() {
+  const ch = S.channel;
+  ch.count = clampCount(ch.count);
+  const url = ch.url.trim();
+  const seq = ++channelSeq;
+  Object.assign(ch, { kind: '', error: '', name: '', videos: [], selected: selectNone(), skipped: 0, note: '' });
+  if (!url) {
+    Object.assign(ch, { status: 'error', kind: 'invalid',
+      error: 'Paste a channel link first — for example https://www.youtube.com/@handle.' });
+    return renderKeepingFocus('#pick-status');
+  }
+  ch.status = 'loading';
+  render();
+  try {
+    const res = await api('/api/channel/videos?' + new URLSearchParams({ url, count: String(ch.count) }));
+    if (seq !== channelSeq) return undefined;
+    Object.assign(ch, { status: 'ready', videos: res.videos || [], name: res.channel || '', skipped: res.skipped || 0 });
+  } catch (err) {
+    if (seq !== channelSeq) return undefined;
+    Object.assign(ch, { status: 'error', kind: err.kind || '', error: err.message });
+  }
+  return renderKeepingFocus('#pick-status');
+}
+
+function onPickToggle(event) {
+  const box = event.target;
+  S.channel.selected = setSelected(S.channel.selected, box.dataset.pick, box.checked);
+  S.channel.note = '';
+  syncPickerControls();
+}
+
+function syncPickerControls() {
+  const ch = S.channel;
+  const on = new Set(ch.selected);
+  document.querySelectorAll('.pick-check').forEach((box) => {
+    box.checked = on.has(box.dataset.pick);
+    const card = box.closest('.pick-card');
+    if (card) card.classList.toggle('on', box.checked);
+  });
+  const n = ch.selected.length;
+  const add = $('#pick-add');
+  if (add) { add.disabled = !n; add.textContent = addLabel(n); }
+  const count = $('#pick-count');
+  if (count) count.textContent = n + ' selected';
+  const note = $('#pick-note');
+  if (note) note.textContent = ch.note;
+}
+
+function addSelectedToRun() {
+  const ch = S.channel;
+  const urls = selectedUrls(ch.videos, ch.selected);
+  if (!urls.length) return;
+  const out = appendToCorpus(S.urlText, parseUrls(S.urlText), urls);
+  S.urlText = out.text;
+  ch.selected = selectNone();
+  ch.note = addedNote(out.added, out.already);
+  // The add button is disabled by now, so the confirmation takes focus.
+  render();
+  const note = $('#pick-note');
+  if (note) note.focus();
+}
+
+function onThumbEvent(event) {
+  const img = event.target;
+  if (!img || img.tagName !== 'IMG') return;
+  const thumb = img.closest('.pick-thumb');
+  if (thumb && thumbIsBroken({ type: event.type, naturalWidth: img.naturalWidth })) {
+    thumb.classList.add('broken');
+  }
 }
 
 // ── screen: progress ────────────────────────────────────────────────
@@ -1839,6 +2042,16 @@ document.addEventListener('click', (event) => {
     case 'toggle-whisper': S.settings.use_whisper_fallback = !S.settings.use_whisper_fallback; return render();
     case 'toggle-people': S.settings.detect_people = !S.settings.detect_people; return render();
     case 'start-run': return startRun();
+    case 'channel-fetch': return fetchChannel();
+    case 'pick-all':
+      S.channel.selected = selectAll(S.channel.videos);
+      S.channel.note = '';
+      return syncPickerControls();
+    case 'pick-none':
+      S.channel.selected = selectNone();
+      S.channel.note = '';
+      return syncPickerControls();
+    case 'pick-add': return addSelectedToRun();
     case 'toggle-play': return togglePlay();
     case 'resume-follow': {
       setFollow(true);
@@ -1871,7 +2084,29 @@ document.addEventListener('input', (event) => {
     const btn = document.querySelector('[data-action="start-run"]');
     if (btn) btn.disabled = !urls.length;
   }
+  if (event.target.id === 'channel-url') S.channel.url = event.target.value;
+  if (event.target.id === 'channel-count') S.channel.count = event.target.value;
 });
+
+document.addEventListener('change', (event) => {
+  const el = event.target;
+  if (el.classList && el.classList.contains('pick-check')) return onPickToggle(event);
+  if (el.id === 'channel-count') {
+    S.channel.count = clampCount(el.value);
+    el.value = S.channel.count;
+  }
+  return undefined;
+});
+
+document.addEventListener('submit', (event) => {
+  if (!event.target.dataset || event.target.dataset.form !== 'channel') return;
+  event.preventDefault();
+  fetchChannel();
+});
+
+// error and load do not bubble; only the capture phase sees them at document.
+document.addEventListener('error', onThumbEvent, true);
+document.addEventListener('load', onThumbEvent, true);
 
 document.addEventListener('change', async (event) => {
   if (event.target.id !== 'csv-input') return;
